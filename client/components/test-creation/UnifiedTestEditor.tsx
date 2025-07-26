@@ -242,13 +242,30 @@ export function UnifiedTestEditor(
 
   const insertShortAnswer = (answer: string, questionNumber?: number) => {
     if (!editor) return;
-    // Insert a numbered placeholder for student view
-    editor.chain().focus().insertContent(`[${questionNumber}] `).run();
+    // Support multiple answers separated by comma
+    const answersArray = answer
+      .split(",")
+      .map((a) => a.trim())
+      .filter((a) => a.length > 0);
+    editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: "short_answer",
+        attrs: {
+          answers: answersArray,
+          admin: true,
+          number: questionNumber,
+        },
+      })
+      .run();
   };
 
   const insertQuestion = () => {
     let questionContent: any = {};
     let summary = "";
+
+    console.log("🔍 Inserting question type:", currentQuestionType);
 
     switch (currentQuestionType) {
       case "short_answer": {
@@ -259,18 +276,37 @@ export function UnifiedTestEditor(
           .map((a) => a.trim())
           .filter((a) => a);
         
+        console.log("🔍 Short Answer Debug:", {
+          answersText,
+          answers,
+          answersCount: answers.length
+        });
+        
         let currentQuestionNumber = getNextQuestionNumber();
         
         answers.forEach((answer, index) => {
           const question_number = currentQuestionNumber + index;
           const id = `q_${Date.now()}_${index}`;
-          // Insert custom node
+          
+          console.log("🔍 Inserting Short Answer Node:", {
+            questionNumber: question_number,
+            answer,
+            nodeAttrs: {
+              id,
+              question_number,
+              placeholder: `Answer ${question_number}`,
+              answers: [answer],
+            }
+          });
+          
+          // Insert custom node WITH correct answer(s)
           editor.chain().focus().insertContent({
             type: 'short_answer',
             attrs: {
               id,
               question_number,
               placeholder: `Answer ${question_number}`,
+              answers: [answer], // <--- THIS IS THE FIX!
             },
           }).run();
         });
@@ -280,10 +316,14 @@ export function UnifiedTestEditor(
           type: "short_answer" as const,
           content: {
             answer,
+            answers: [answer], // <--- THIS IS THE FIX!
             question_number: currentQuestionNumber + index,
           },
           summary: `Short Answer: [${currentQuestionNumber + index}] ${answer}`,
         })) as Question[];
+        
+        console.log("🔍 Short Answer Questions Array:", newQuestions);
+        
         const updatedQuestions = [...questions, ...newQuestions];
         setQuestions(updatedQuestions);
         if (onQuestionsChange) onQuestionsChange(updatedQuestions);
@@ -298,6 +338,14 @@ export function UnifiedTestEditor(
         const validOptions = mcqOptions.filter((opt) => opt.trim());
         const id = `mcq_${Date.now()}`;
         const nextQuestionNumber = getNextQuestionNumber();
+        
+        console.log("🔍 MCQ Debug:", {
+          question: mcqQuestion,
+          options: validOptions,
+          correctOption,
+          correctAnswer: validOptions[correctOption],
+          questionNumber: nextQuestionNumber
+        });
         
         // Insert custom node
         editor.chain().focus().insertContent({
@@ -322,6 +370,9 @@ export function UnifiedTestEditor(
           },
           summary: `MCQ ${nextQuestionNumber}: ${mcqQuestion.slice(0, 30)}${mcqQuestion.length > 30 ? "..." : ""}`,
         } as Question;
+        
+        console.log("🔍 MCQ Question Array:", newQuestion);
+        
         const updatedQuestions = [...questions, newQuestion];
         setQuestions(updatedQuestions);
         if (onQuestionsChange) onQuestionsChange(updatedQuestions);
@@ -340,6 +391,13 @@ export function UnifiedTestEditor(
         const left = validPairs.map(p => p.left);
         const right = validPairs.map(p => p.right);
         const nextQuestionNumber = getNextQuestionNumber();
+        
+        console.log("🔍 Matching Debug:", {
+          pairs: validPairs,
+          left,
+          right,
+          questionNumber: nextQuestionNumber
+        });
         
         // Insert single custom node with all pairs
         editor.chain().focus().insertContent({
@@ -364,6 +422,8 @@ export function UnifiedTestEditor(
           summary: `Matching ${nextQuestionNumber}: ${validPairs.map(pair => `${pair.left} - ${pair.right}`).join(', ')}`,
         } as Question;
         
+        console.log("🔍 Matching Question Array:", newQuestion);
+        
         const updatedQuestions = [...questions, newQuestion];
         setQuestions(updatedQuestions);
         if (onQuestionsChange) onQuestionsChange(updatedQuestions);
@@ -379,6 +439,12 @@ export function UnifiedTestEditor(
         // Create one question containing all labels
         const id = `map_${Date.now()}`;
         const nextQuestionNumber = getNextQuestionNumber();
+        
+        console.log("🔍 Map Diagram Debug:", {
+          imageFiles: mapImageFiles,
+          boxes: mapBoxes,
+          questionNumber: nextQuestionNumber
+        });
         
         // Insert single custom node with all boxes and one image
         editor.chain().focus().insertContent({
@@ -403,6 +469,8 @@ export function UnifiedTestEditor(
           summary: `Map ${nextQuestionNumber}: ${mapBoxes.map(box => box.answer || 'No answer').join(', ')}`,
         } as Question;
         
+        console.log("🔍 Map Diagram Question Array:", newQuestion);
+        
         const updatedQuestions = [...questions, newQuestion];
         setQuestions(updatedQuestions);
         if (onQuestionsChange) onQuestionsChange(updatedQuestions);
@@ -417,6 +485,8 @@ export function UnifiedTestEditor(
     setShowModal(false);
     setCurrentQuestionType(null);
     resetForms();
+    
+    console.log("🔍 Final Questions State:", questions);
   };
 
   const deleteQuestion = (questionId: string) => {
@@ -753,7 +823,7 @@ export function UnifiedTestEditor(
                 <div>
                   <Label>Answers (one per line)</Label>
                   <Textarea
-                    placeholder="round&#10;wooden&#10;25"
+                    placeholder="round,wooden,25"
                     value={shortAnswers}
                     onChange={(e) => setShortAnswers(e.target.value)}
                     rows={5}

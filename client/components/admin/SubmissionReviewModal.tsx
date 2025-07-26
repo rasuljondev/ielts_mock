@@ -28,6 +28,7 @@ import {
   Loader2,
   AlertCircle,
   Star,
+  Bug,
 } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
@@ -36,6 +37,7 @@ import {
   saveAutoGradedResults,
   GradingResult,
   QuestionResult,
+  debugGradingSystem,
 } from "@/lib/autoGrading";
 import { supabase } from "@/lib/supabase";
 import WritingGradingModal from "./WritingGradingModal";
@@ -109,11 +111,77 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
     }
   }, [isOpen, submission]);
 
-  const loadAutoGrading = async () => {
+  const debugCorrectAnswers = async () => {
     if (!submission) return;
+    
+    console.log("🔍 Debugging correct answers for submission:", submission.id);
+    
+    try {
+      // Get the grading result first
+      const result = await autoGradeSubmission(submission.id);
+      
+      // Check short answer questions specifically
+      const shortAnswerQuestions = result.detailedResults.filter(
+        r => r.questionType === "short_answer" && r.section === "listening"
+      );
+      
+      console.log("🔍 Short Answer Questions Found:", shortAnswerQuestions.length);
+      
+      shortAnswerQuestions.forEach((question, index) => {
+        console.log(`🔍 Short Answer Question ${index + 1}:`, {
+          questionId: question.questionId,
+          questionText: question.questionText,
+          userAnswer: question.userAnswer,
+          correctAnswer: question.correctAnswer,
+          correctAnswerType: typeof question.correctAnswer,
+          isCorrect: question.isCorrect
+        });
+      });
+      
+      toast.success(`Found ${shortAnswerQuestions.length} short answer questions. Check console for details.`);
+      
+    } catch (error) {
+      console.error("❌ Debug error:", error);
+      toast.error("Debug failed. Check console for details.");
+    }
+  };
+
+  const loadAutoGrading = async () => {
+    if (!submission) {
+      console.error("❌ No submission data provided to modal");
+      toast.error("No active submission found. Please refresh the page and try again.");
+      return;
+    }
+
+    console.log("🔍 Loading auto-grading for submission:", {
+      submissionId: submission.id,
+      testId: submission.test_id,
+      studentId: submission.student_id,
+      status: submission.status,
+      hasAnswers: !!submission.answers
+    });
 
     setLoading(true);
     try {
+      // First verify the submission exists in the database
+      const { data: submissionCheck, error: checkError } = await supabase
+        .from("test_submissions")
+        .select("id, test_id, student_id, answers, status")
+        .eq("id", submission.id)
+        .single();
+
+      if (checkError) {
+        console.error("❌ Submission not found in database:", checkError);
+        throw new Error(`Submission not found in database: ${checkError.message}`);
+      }
+
+      if (!submissionCheck) {
+        console.error("❌ Submission data is null");
+        throw new Error("Submission data is null");
+      }
+
+      console.log("✅ Submission found in database:", submissionCheck);
+
       const result = await autoGradeSubmission(submission.id);
       setGradingResult(result);
 
@@ -124,9 +192,17 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
         writing_score: result.writingBandScore.toString(),
         total_score: result.overallBandScore.toString(),
       });
+
+      console.log("✅ Auto-grading completed successfully");
     } catch (error: any) {
-      console.error("Grading failed:", error);
-      toast.error(`Grading failed: ${error.message}`);
+      console.error("❌ Grading failed:", error);
+      
+      let errorMessage = "Grading failed";
+      if (error?.message) {
+        errorMessage += `: ${error.message}`;
+      }
+      
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -340,6 +416,18 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
 
   const renderQuestionResult = (result: QuestionResult, index: number) => {
     const isCorrect = getQuestionCorrectness(result);
+    
+    // Debug: Log what's being rendered
+    console.log("🔍 Rendering Question Result:", {
+      questionId: result.questionId,
+      questionText: result.questionText,
+      questionType: result.questionType,
+      userAnswer: result.userAnswer,
+      correctAnswer: result.correctAnswer,
+      correctAnswerType: typeof result.correctAnswer,
+      isCorrect,
+      section: result.section
+    });
 
     return (
       <motion.div
@@ -400,9 +488,28 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
             <div>
               <span className="font-medium text-sm">Correct Answer:</span>
               <p className="text-sm mt-1 p-2 bg-white rounded border">
-                {Array.isArray(result.correctAnswer)
-                  ? result.correctAnswer.join(", ")
-                  : result.correctAnswer}
+                {(() => {
+                  // Handle different question types and answer formats
+                  if (result.questionType === "map_labeling") {
+                    return result.correctAnswer || "No correct answer set";
+                  } else if (result.questionType === "matching") {
+                    return result.correctAnswer || "No correct answer set";
+                  } else if (result.questionType === "multiple_choice") {
+                    return result.correctAnswer || "No correct answer set";
+                  } else if (result.questionType === "short_answer") {
+                    // For short answers, the correctAnswer is already processed in autoGrading.ts
+                    // Just display it directly - no need to parse again
+                    if (result.correctAnswer === null || result.correctAnswer === undefined) {
+                      return "No correct answer set";
+                    }
+                    return String(result.correctAnswer);
+                  } else {
+                    // Default handling
+                    return Array.isArray(result.correctAnswer)
+                      ? result.correctAnswer.join(", ")
+                      : result.correctAnswer || "No correct answer set";
+                  }
+                })()}
               </p>
             </div>
           </div>
@@ -418,7 +525,24 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
     );
   };
 
-  if (!submission) return null;
+  if (!submission) {
+    console.error("❌ SubmissionReviewModal: No submission data provided");
+    return (
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Error</DialogTitle>
+            <DialogDescription>
+              No active submission found. Please refresh the page and try again.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={onClose}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -432,6 +556,26 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
             {submission.student.first_name} {submission.student.last_name} -{" "}
             {submission.test.title}
           </DialogDescription>
+          <div className="flex gap-2 mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => debugGradingSystem(submission.id)}
+              className="text-xs"
+            >
+              <Bug className="h-4 w-4 mr-1" />
+              Debug Grading
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => debugCorrectAnswers()}
+              className="text-xs"
+            >
+              <Bug className="h-4 w-4 mr-1" />
+              Debug Correct Answers
+            </Button>
+          </div>
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full">

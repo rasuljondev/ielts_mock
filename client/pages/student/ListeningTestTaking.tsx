@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase";
 import { parseContentForStudent } from "@/lib/contentParser";
-import { Clock, Headphones, Send, ArrowLeft } from "lucide-react";
+import { Clock, Headphones, Send, ArrowLeft, ChevronLeft, ChevronRight, CheckCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { Table } from "@tiptap/extension-table";
@@ -22,18 +22,32 @@ const ListeningTestTaking: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
 
+  // Debug: Log user state
+  console.log("🔍 User authentication state:", {
+    user: user?.id,
+    testId,
+    isAuthenticated: !!user
+  });
+
   // States
   const [loading, setLoading] = useState(true);
   const [retryAttempt, setRetryAttempt] = useState(0);
-  const [section, setSection] = useState<any>(null);
+  const [sections, setSections] = useState<any[]>([]);
+  const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
   const [studentAnswers, setStudentAnswers] = useState<Record<string, string>>({});
   const [timeLeft, setTimeLeft] = useState(3600); // 60 minutes default
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionId, setSubmissionId] = useState<string | null>(null);
 
+  // Current section (computed from sections array and currentSectionIndex)
+  const currentSection = sections[currentSectionIndex] || null;
+
   // --- Unified localStorage key for all state ---
   const localStorageKey = testId && user?.id ? `listening-test-${testId}-${user.id}` : null;
+
+  // Debug: Log localStorage key
+  console.log("🔍 localStorageKey:", localStorageKey);
 
   // --- Restore from localStorage on mount ---
   useEffect(() => {
@@ -44,6 +58,7 @@ const ListeningTestTaking: React.FC = () => {
         const parsed = JSON.parse(saved);
         if (parsed.answers) setStudentAnswers(parsed.answers);
         if (parsed.timeLeft) setTimeLeft(parsed.timeLeft);
+        if (parsed.currentSectionIndex !== undefined) setCurrentSectionIndex(parsed.currentSectionIndex);
       } catch {}
     }
   }, [localStorageKey]);
@@ -56,11 +71,12 @@ const ListeningTestTaking: React.FC = () => {
       JSON.stringify({
         answers: studentAnswers,
         timeLeft,
+        currentSectionIndex,
         testId,
         timestamp: Date.now(),
       })
     );
-  }, [studentAnswers, timeLeft, localStorageKey, testId]);
+  }, [studentAnswers, timeLeft, currentSectionIndex, localStorageKey, testId]);
 
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -208,174 +224,196 @@ const ListeningTestTaking: React.FC = () => {
   };
 
   // Load listening section and handle time persistence
-  useEffect(() => {
-    const fetchSection = async (retryCount = 0) => {
-      if (!testId) {
-        setLoading(false);
-        return;
-      }
+  const fetchSection = async (retryCount = 0) => {
+    if (!testId) return;
 
-      try {
-        console.log(
-          `Fetching section for test ID: ${testId} (attempt ${retryCount + 1})`,
-        );
+    console.log(
+      `🔍 Fetching sections for test ID: ${testId} (attempt ${retryCount + 1})`,
+    );
 
-        // Check for saved time
-        const savedTime = localStorage.getItem(`listening-exam-time-${testId}`);
+    // Check for saved time
+    const savedTime = localStorage.getItem(`listening-exam-time-${testId}`);
+    console.log("🔍 Saved time from localStorage:", savedTime);
 
-        // Add timeout to the request
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-        const { data, error } = await supabase
-          .from("listening_sections")
-          .select(
-            `
+    try {
+      const { data, error } = await supabase
+        .from("listening_sections")
+        .select(
+          `
+          id,
+          content,
+          audio_url,
+          section_number,
+          listening_questions (
             id,
-            content,
-            audio_url,
-            section_number,
-            listening_questions (
-              id,
-              question_text,
-              question_type,
-              question_number,
-              question_order,
-              options,
-              correct_answer,
-              points
-            )
-          `,
+            question_text,
+            question_type,
+            question_number,
+            question_order,
+            options,
+            correct_answer,
+            points
           )
-          .eq("test_id", testId)
-          .order("section_number")
-          .limit(1)
-          .abortSignal(controller.signal);
+        `,
+        )
+        .eq("test_id", testId)
+        .order("section_number")
+        .abortSignal(controller.signal);
 
-        clearTimeout(timeoutId);
-        console.log("Supabase response:", {
-          data,
-          error,
-          dataLength: data?.length,
-        });
+      clearTimeout(timeoutId);
+      console.log("🔍 Supabase response:", {
+        data,
+        error,
+        dataLength: data?.length,
+      });
 
-        if (error) {
-          console.error("Error fetching section:", error);
+      if (error) {
+        console.error("❌ Error fetching sections:", error);
 
-          let errorMessage = "Failed to load listening section";
+        let errorMessage = "Failed to load listening sections";
 
-          // Handle different error types
-          if (error?.message) {
-            errorMessage = error.message;
-          } else if (typeof error === "string") {
-            errorMessage = error;
-          } else if (error?.error) {
-            errorMessage = error.error;
-          } else if (error?.details) {
-            errorMessage = error.details;
-          }
-
-          // Handle specific Supabase error codes
-          if (error?.code) {
-            if (error.code === "PGRST116") {
-              errorMessage =
-                "No listening section found for this test. Please contact your instructor.";
-            } else if (error.code.startsWith("PGRST")) {
-              errorMessage = `Database error (${error.code}): ${error.message || errorMessage}`;
-            }
-          }
-
-          console.error("Processed error message:", errorMessage);
-          alert(`Error loading test: ${errorMessage}`);
-          setSection(null);
-        } else if (!data || data.length === 0) {
-          console.error("No listening section found for test:", testId);
-
-          // Offer to create demo data for testing
-          const createDemo = confirm(
-            "No listening section found for this test.\n\n" +
-              "Would you like to create demo test data?\n\n" +
-              "This will create a sample listening test with questions.",
-          );
-
-          if (createDemo) {
-            await createDemoTestData(testId);
-          } else {
-            alert(
-              "No listening section found for this test. Please contact your instructor.",
-            );
-            setSection(null);
-          }
-        } else {
-          const sectionData = data[0]; // Take first section
-          console.log("Section loaded successfully:", sectionData);
-          console.log(
-            "Questions found:",
-            sectionData.listening_questions?.length || 0,
-          );
-          setSection(sectionData);
-
-          // Handle existing submission and time restoration
-          await handleExistingSubmission(sectionData, savedTime);
-          
-          setLoading(false); // Set loading to false on success
-        }
-      } catch (error: any) {
-        console.error(`Unexpected error (attempt ${retryCount + 1}):`, error);
-
-        let errorMessage =
-          "An unexpected error occurred while loading the test";
-
+        // Handle different error types
         if (error?.message) {
-          if (
-            error.message.includes("Failed to fetch") ||
-            error.message.includes("NetworkError")
-          ) {
-            errorMessage =
-              "Network connection error. Please check your internet connection.";
-          } else if (error.message.includes("aborted")) {
-            errorMessage = "Request timed out. Please try again.";
-          } else {
-            errorMessage = error.message;
-          }
+          errorMessage = error.message;
         } else if (typeof error === "string") {
           errorMessage = error;
+        } else if (error?.details) {
+          errorMessage = error.details;
         }
 
-        console.error("Processed error message:", errorMessage);
-
-        // Retry logic for network errors
-        const isNetworkError =
-          error?.message?.includes("Failed to fetch") ||
-          error?.message?.includes("NetworkError") ||
-          error?.message?.includes("aborted");
-
-        if (isNetworkError && retryCount < 2) {
-          const retryDelay = (retryCount + 1) * 2000; // 2s, 4s
-          console.log(
-            `Network error detected. Retrying in ${retryDelay / 1000} seconds...`,
-          );
-          setRetryAttempt(retryCount + 1);
-          setTimeout(() => {
-            fetchSection(retryCount + 1);
-          }, retryDelay);
-          return; // Don't set loading to false or show alert yet
+        // Handle specific Supabase error codes
+        if (error?.code) {
+          if (error.code === "PGRST116") {
+            errorMessage =
+              "No listening sections found for this test. Please contact your instructor.";
+          } else if (error.code.startsWith("PGRST")) {
+            errorMessage = `Database error (${error.code}): ${error.message || errorMessage}`;
+          }
         }
 
-        // If we've exhausted retries or it's not a network error, show error
+        console.error("❌ Processed error message:", errorMessage);
         alert(`Error loading test: ${errorMessage}`);
-        setSection(null);
-        setLoading(false);
-      }
-    };
+        setSections([]);
+      } else if (!data || data.length === 0) {
+        console.error("❌ No listening sections found for test:", testId);
 
-    fetchSection();
+        // Offer to create demo data for testing
+        const createDemo = confirm(
+          "No listening sections found for this test.\n\n" +
+            "Would you like to create demo test data?\n\n" +
+            "This will create a sample listening test with questions.",
+        );
+
+        if (createDemo) {
+          await createDemoTestData(testId);
+        } else {
+          alert(
+            "No listening sections found for this test. Please contact your instructor.",
+          );
+          setSections([]);
+        }
+      } else {
+        console.log("✅ Sections loaded successfully:", data);
+        console.log(
+          "✅ Total questions found:",
+          data.reduce((total, section) => total + (section.listening_questions?.length || 0), 0),
+        );
+        setSections(data);
+
+        // Handle existing submission and time restoration
+        console.log("🔍 Calling handleExistingSubmission with:", {
+          sectionData: data[0],
+          savedTime,
+          user: user?.id
+        });
+        
+        await handleExistingSubmission(data[0], savedTime);
+        
+        console.log("✅ handleExistingSubmission completed");
+      }
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      console.error("❌ Unexpected error in fetchSection:", error);
+      alert(`Unexpected error: ${error.message || error}`);
+      setSections([]);
+    }
+  };
+
+  // Fetch sections on mount
+  useEffect(() => {
+    if (testId) {
+      fetchSection();
+    }
   }, [testId]);
 
+  // Debug: Monitor user state changes
+  useEffect(() => {
+    console.log("🔍 User state changed:", {
+      userId: user?.id,
+      isAuthenticated: !!user,
+      testId
+    });
+  }, [user, testId]);
+
+  // Debug: Monitor submissionId state
+  useEffect(() => {
+    console.log("🔍 submissionId state changed:", submissionId);
+  }, [submissionId]);
+
+  // Start audio when sections are loaded
+  useEffect(() => {
+    if (sections.length > 0 && sections[0].audio_url && audioRef.current) {
+      // Ensure audio starts playing when sections are loaded
+      const audio = audioRef.current;
+      if (audio.paused && !audio.ended) {
+        audio.play().catch(error => {
+          console.log('Audio autoplay prevented:', error);
+          // This is normal - browsers often block autoplay
+        });
+      }
+    }
+  }, [sections]);
+
+  // Prevent audio from restarting when switching sections
+  useEffect(() => {
+    // This effect ensures audio continues playing when switching sections
+    // We don't need to do anything here as the audio element is outside the section-specific content
+  }, [currentSectionIndex]);
+
+  // Navigation functions
+  const switchSection = (sectionIndex: number) => {
+    if (sectionIndex >= 0 && sectionIndex < sections.length) {
+      setCurrentSectionIndex(sectionIndex);
+      // Don't restart audio - let it continue playing
+    }
+  };
+
+  const nextSection = () => {
+    if (currentSectionIndex < sections.length - 1) {
+      setCurrentSectionIndex(currentSectionIndex + 1);
+      // Don't restart audio - let it continue playing
+    }
+  };
+
+  const previousSection = () => {
+    if (currentSectionIndex > 0) {
+      setCurrentSectionIndex(currentSectionIndex - 1);
+      // Don't restart audio - let it continue playing
+    }
+  };
+
+  // Get current section questions
+  const getCurrentSectionQuestions = () => {
+    return currentSection?.listening_questions || [];
+  };
+
   // After fetching the section and questions (wherever section is set):
-  if (section && section.listening_questions) {
-    console.log('DEBUG: Loaded questions:', section.listening_questions.map(q => ({id: q.id, type: q.question_type, text: q.question_text})));
-    section.listening_questions.forEach(q => {
+  if (currentSection && currentSection.listening_questions) {
+    console.log('DEBUG: Loaded questions:', currentSection.listening_questions.map(q => ({id: q.id, type: q.question_type, text: q.question_text})));
+    currentSection.listening_questions.forEach(q => {
       if (q.question_type === 'map_labeling' || q.question_type === 'map_diagram') {
         let mapData = q.correct_answer;
         if (typeof mapData === 'string') {
@@ -458,11 +496,11 @@ const ListeningTestTaking: React.FC = () => {
   }, [testId, timeLeft]);
 
   useEffect(() => {
-    if (section && section.listening_questions) {
-      console.log("Student UI: listening_questions", section.listening_questions);
+    if (currentSection && currentSection.listening_questions) {
+      console.log("Student UI: listening_questions", currentSection.listening_questions);
       console.log("Student UI: getOrderedAnswerBlanks", getOrderedAnswerBlanks());
     }
-  }, [section]);
+  }, [currentSection]);
 
   // Debug: Log when studentAnswers changes
   useEffect(() => {
@@ -498,13 +536,13 @@ const ListeningTestTaking: React.FC = () => {
     }
   };
 
-  const handleAnswerChange = (questionNumber: number, value: string) => {
-    console.log(`Answer changed for question ${questionNumber}:`, value);
+  const handleAnswerChange = (questionId: string, value: string) => {
+    console.log(`Answer changed for question ${questionId}:`, value);
     
     setStudentAnswers((prev) => {
       const newAnswers = {
         ...prev,
-        [questionNumber.toString()]: value,
+        [questionId]: value,
       };
       console.log("Updated student answers:", newAnswers);
       return newAnswers;
@@ -527,152 +565,125 @@ const ListeningTestTaking: React.FC = () => {
 
   // Handle existing submission and time restoration
   const handleExistingSubmission = async (sectionData: any, savedTime: string | null) => {
-    console.log("Handling existing submission...", { savedTime, testId, userId: user?.id });
-    
     try {
-      // Always set time first from localStorage for immediate persistence
-      const timeToUse = savedTime ? parseInt(savedTime) : 3600;
-      console.log("Setting time to:", timeToUse, "seconds");
-      setTimeLeft(timeToUse);
-
-      // Check for localStorage backup answers first
-      const localStorageAnswers = localStorage.getItem(`listening-answers-${testId}`);
-      if (localStorageAnswers) {
-        try {
-          const parsedAnswers = JSON.parse(localStorageAnswers);
-          console.log("Found localStorage backup answers:", parsedAnswers);
-          setStudentAnswers(parsedAnswers);
-        } catch (e) {
-          console.error("Failed to parse localStorage answers:", e);
-        }
+      // Check if user is authenticated
+      if (!user?.id) {
+        console.error("❌ User not authenticated - cannot create submission");
+        toast.error("Please log in to take this test");
+        navigate("/auth/login");
+        return;
       }
 
-      // Try to check for existing submission
+      console.log("🔍 Checking for existing submission:", {
+        testId,
+        studentId: user?.id,
+        savedTime
+      });
+
+      // Check for existing submission in test_submissions table
       const { data: existingSubmission, error: fetchError } = await supabase
-        .from("listening_submissions")
+        .from("test_submissions")
         .select("*")
         .eq("test_id", testId)
         .eq("student_id", user?.id)
         .single();
 
-      if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = no rows returned
-        console.error("Error fetching existing submission:", fetchError);
+      if (fetchError && fetchError.code !== 'PGRST116') {
+        // PGRST116 means no rows returned, which is expected for new submissions
+        console.error("❌ Error fetching existing submission:", fetchError);
+        throw fetchError;
       }
 
       if (existingSubmission) {
-        console.log("Found existing submission:", existingSubmission.id);
-        console.log("Submission data:", existingSubmission);
-        
-        if (existingSubmission.status === "submitted") {
+        console.log("✅ Found existing submission:", {
+          id: existingSubmission.id,
+          status: existingSubmission.status,
+          hasAnswers: !!existingSubmission.answers
+        });
+
+        if (existingSubmission.status === "submitted" || existingSubmission.status === "completed") {
           toast.info("You have already completed this test");
-          navigate("/student/tests");
+          navigate("/student/tests/history");
           return;
         }
 
         setSubmissionId(existingSubmission.id);
-        
-        // Restore answers with detailed logging
-        const savedAnswers = existingSubmission.answers || {};
-        console.log("Restoring answers from database:", savedAnswers);
-        console.log("Answers type:", typeof savedAnswers);
-        console.log("Answers keys:", Object.keys(savedAnswers));
-        
-        // Merge with localStorage answers if available
-        if (localStorageAnswers) {
-          try {
-            const parsedLocalAnswers = JSON.parse(localStorageAnswers);
-            const mergedAnswers = { ...parsedLocalAnswers, ...savedAnswers };
-            console.log("Merged answers (localStorage + database):", mergedAnswers);
-            setStudentAnswers(mergedAnswers);
-          } catch (e) {
-            console.error("Failed to merge answers:", e);
-            setStudentAnswers(savedAnswers);
-          }
-        } else {
-          setStudentAnswers(savedAnswers);
-        }
-        
-        // Force a re-render to ensure UI updates
-        setTimeout(() => {
-          console.log("Current student answers after restoration:", studentAnswers);
-        }, 100);
-      } else {
-        console.log("No existing submission found, creating new one...");
-        
-        // Try to create new submission, but don't fail if it doesn't work
-        try {
-          const { data: newSubmission, error: submissionError } = await supabase
-            .from("listening_submissions")
-            .insert({
-              test_id: testId,
-              section_id: sectionData.id,
-              student_id: user?.id,
-              status: "in_progress",
-              started_at: new Date().toISOString(),
-              answers: {},
-            })
-            .select()
-            .single();
+        setStudentAnswers(existingSubmission.answers || {});
 
-          if (submissionError) {
-            console.error("Failed to create submission:", submissionError);
-            // Don't show error toast, just continue without submission tracking
-            console.log("Continuing without submission tracking...");
-          } else {
-            setSubmissionId(newSubmission.id);
-            console.log("Created new submission:", newSubmission.id);
-          }
-        } catch (createError) {
-          console.error("Error creating submission:", createError);
-          // Continue without submission tracking
+        // Restore time - use saved time if available, otherwise use submission time
+        const timeToUse = savedTime
+          ? parseInt(savedTime)
+          : existingSubmission.time_remaining_seconds || 3600; // 60 minutes default
+
+        setTimeLeft(timeToUse);
+        console.log("✅ Restored existing submission with ID:", existingSubmission.id);
+      } else {
+        console.log("🔍 No existing submission found, creating new one...");
+        
+        // Create new submission
+        const { data: newSubmission, error: submissionError } = await supabase
+          .from("test_submissions")
+          .insert({
+            test_id: testId,
+            student_id: user?.id,
+            status: "in_progress",
+            time_remaining_seconds: 3600, // 60 minutes default
+            answers: {},
+          })
+          .select()
+          .single();
+
+        if (submissionError) {
+          console.error("❌ Submission creation error:", submissionError);
+          throw submissionError;
         }
+
+        console.log("✅ Created new submission:", {
+          id: newSubmission.id,
+          testId: newSubmission.test_id,
+          studentId: newSubmission.student_id
+        });
+
+        setSubmissionId(newSubmission.id);
+        setTimeLeft(3600); // 60 minutes default
       }
-    } catch (error) {
-      console.error("Error in handleExistingSubmission:", error);
-      // Always ensure time is set even if everything else fails
-      const timeToUse = savedTime ? parseInt(savedTime) : 3600;
-      setTimeLeft(timeToUse);
+    } catch (error: any) {
+      console.error("❌ Error handling existing submission:", error);
+      
+      // Show user-friendly error message
+      let errorMessage = "Failed to initialize test session";
+      if (error?.message) {
+        errorMessage += `: ${error.message}`;
+      }
+      
+      toast.error(errorMessage);
+      
+      // Don't throw here, but log the error for debugging
+      console.error("Full error details:", error);
     }
   };
 
   // Auto-save answers to database
   const autoSaveAnswers = async () => {
-    console.log("Auto-save triggered with:", { submissionId, answersCount: Object.keys(studentAnswers).length });
-    
-    if (!submissionId) {
-      console.log("No submissionId, skipping auto-save");
-      return;
-    }
-    
-    if (Object.keys(studentAnswers).length === 0) {
-      console.log("No answers to save, skipping auto-save");
-      return;
-    }
-
-    // Also save to localStorage as backup
-    localStorage.setItem(`listening-answers-${testId}`, JSON.stringify(studentAnswers));
-    console.log("Answers saved to localStorage as backup");
+    if (!submissionId) return;
 
     try {
-      console.log("Saving answers to database:", studentAnswers);
-      
-      const { data, error } = await supabase
-        .from("listening_submissions")
+      const { error } = await supabase
+        .from("test_submissions")
         .update({
           answers: studentAnswers,
-          updated_at: new Date().toISOString(),
+          time_remaining_seconds: timeLeft,
         })
-        .eq("id", submissionId)
-        .select();
+        .eq("id", submissionId);
 
       if (error) {
         console.error("Auto-save error:", error);
-        console.error("Error details:", { message: error.message, details: error.details, hint: error.hint });
-      } else {
-        console.log("Answers auto-saved successfully:", data);
+        throw error;
       }
-    } catch (error) {
+      console.log("Auto-save successful");
+    } catch (error: any) {
       console.error("Auto-save failed:", error);
+      // Don't show error toast for auto-save failures
     }
   };
 
@@ -681,53 +692,59 @@ const ListeningTestTaking: React.FC = () => {
     setIsSubmitting(true);
 
     try {
-      console.log("Submitting answers:", studentAnswers);
-
-      // Update existing submission or create new one
-      const submissionData = {
-        test_id: testId,
-        section_id: section.id,
-        answers: studentAnswers,
-        submitted_at: new Date().toISOString(),
-        status: "submitted",
-      };
-
-      let result;
-      if (submissionId) {
-        // Update existing submission
-        result = await supabase
-          .from("listening_submissions")
-          .update(submissionData)
-          .eq("id", submissionId)
-          .select()
-          .single();
-      } else {
-        // Create new submission
-        result = await supabase
-          .from("listening_submissions")
-          .insert(submissionData)
-          .select()
-          .single();
-      }
-
-      if (result.error) {
-        console.error("Submission error:", result.error);
-        toast.error("Failed to submit answers: " + result.error.message);
+      // Check if user is authenticated
+      if (!user?.id) {
+        console.error("❌ User not authenticated - cannot submit test");
+        toast.error("Please log in to submit this test");
+        navigate("/auth/login");
         return;
       }
 
-      console.log("Submission saved:", result.data);
+      console.log("🔍 Attempting to submit test:", {
+        submissionId,
+        testId,
+        studentId: user?.id,
+        answersCount: Object.keys(studentAnswers).length,
+        timeLeft
+      });
+
+      if (!submissionId) {
+        console.error("❌ No submissionId found when trying to submit");
+        toast.error("No active submission found. Please refresh the page and try again.");
+        return;
+      }
+
+      // Update existing submission
+      const { error } = await supabase
+        .from("test_submissions")
+        .update({
+          answers: studentAnswers,
+          status: "submitted",
+          submitted_at: new Date().toISOString(),
+          time_remaining_seconds: timeLeft,
+        })
+        .eq("id", submissionId);
+
+      if (error) {
+        console.error("❌ Submission error:", error);
+        const errorMessage = error.message || error.details || "Unknown error occurred";
+        toast.error("Failed to submit answers: " + errorMessage);
+        return;
+      }
+
+      console.log("✅ Submission saved successfully");
       
       // Clear saved time and answers from localStorage
-      if (localStorageKey) localStorage.removeItem(localStorageKey); // Remove all saved state
+      if (localStorageKey) localStorage.removeItem(localStorageKey);
       
       toast.success("Test submitted successfully!");
 
       // Navigate back to tests
-      navigate("/student/tests");
-    } catch (error) {
-      console.error("Error submitting:", error);
-      toast.error("Failed to submit test. Please try again.");
+      navigate("/student/tests/history");
+    } catch (error: any) {
+      console.error("❌ Error submitting:", error);
+      const errorMessage = error.message || error.details || "Unknown error occurred";
+      toast.error("Failed to submit test: " + errorMessage);
     } finally {
       setIsSubmitting(false);
     }
@@ -808,7 +825,7 @@ const ListeningTestTaking: React.FC = () => {
     console.log("🔍 renderContent called with:", {
       contentType: typeof content,
       contentLength: content?.length || 0,
-      hasQuestions: section?.listening_questions?.length || 0,
+      hasQuestions: currentSection?.listening_questions?.length || 0,
       content: content,
     });
 
@@ -954,7 +971,7 @@ const ListeningTestTaking: React.FC = () => {
           if (questionMatch) {
             const questionNum = parseInt(questionMatch[1]);
             const questionText = questionMatch[2];
-            const question = section.listening_questions?.find(
+            const question = currentSection?.listening_questions?.find(
               (q) => q.question_number === questionNum,
             );
 
@@ -1031,7 +1048,7 @@ const ListeningTestTaking: React.FC = () => {
             // Find corresponding question in database
             const questionNum =
               parseInt(shortAnswerMatch[1]) || lineIndex + 1;
-            const dbQuestion = section.listening_questions?.find(
+            const dbQuestion = currentSection?.listening_questions?.find(
               (q) => q.question_number === questionNum,
             );
             if (dbQuestion) {
@@ -1042,7 +1059,7 @@ const ListeningTestTaking: React.FC = () => {
             // Find corresponding MCQ question
             const questionNum = parseInt(mcqMatch[1]);
             const questionText = mcqMatch[2];
-            const dbQuestion = section.listening_questions?.find(
+            const dbQuestion = currentSection?.listening_questions?.find(
               (q) => q.question_number === questionNum,
             );
             if (dbQuestion) {
@@ -1055,7 +1072,7 @@ const ListeningTestTaking: React.FC = () => {
           } else if (matchingMatch) {
             // Find corresponding matching question
             const questionNum = parseInt(matchingMatch[1]);
-            const dbQuestion = section.listening_questions?.find(
+            const dbQuestion = currentSection?.listening_questions?.find(
               (q) => q.question_number === questionNum,
             );
             if (dbQuestion) {
@@ -1117,7 +1134,7 @@ const ListeningTestTaking: React.FC = () => {
             if (questionMatch) {
               const questionNum = parseInt(questionMatch[1]);
               const questionText = questionMatch[2];
-              const question = section.listening_questions?.find(
+              const question = currentSection?.listening_questions?.find(
                 (q) => q.question_number === questionNum,
               );
 
@@ -1157,10 +1174,10 @@ const ListeningTestTaking: React.FC = () => {
 
   // Helper to build a flat ordered list of all answer blanks (short answer, MCQ, and each matching pair)
   const getOrderedAnswerBlanks = () => {
-    if (!section?.listening_questions) return [];
+    if (!currentSection?.listening_questions) return [];
     const blanks = [];
     let currentNumber = 1;
-    for (const q of section.listening_questions.sort((a, b) => a.question_order - b.question_order)) {
+    for (const q of currentSection.listening_questions.sort((a, b) => a.question_order - b.question_order)) {
       if (q.question_type === 'short_answer') {
         blanks.push({ id: q.id, question_number: currentNumber });
         currentNumber++;
@@ -1202,10 +1219,10 @@ const ListeningTestTaking: React.FC = () => {
             // Extract the number inside the brackets (allow spaces)
             const match = part.match(/\[\s*(\d+)\s*\]/);
             const questionNumber = match ? parseInt(match[1], 10) : undefined;
-            let questionId = questionNumber;
+            let questionId: string | number = questionNumber;
             let isShortAnswer = false;
-            if (questionNumber && section?.listening_questions) {
-              const q = section.listening_questions.find(
+            if (questionNumber && currentSection?.listening_questions) {
+              const q = currentSection.listening_questions.find(
                 q => q.question_number === questionNumber && q.question_type === "short_answer"
               );
               if (q) {
@@ -1218,7 +1235,7 @@ const ListeningTestTaking: React.FC = () => {
                 key={partIndex}
                 type="text"
                 value={studentAnswers[questionId] || ""}
-                onChange={(e) => handleAnswerChange(questionId, e.target.value)}
+                onChange={(e) => handleAnswerChange(String(questionId), e.target.value)}
                 className="inline-block w-20 h-7 border border-gray-300 rounded bg-white text-center font-medium shadow-sm focus:outline-none focus:border-blue-500 focus:shadow-md mx-1"
                 placeholder={isShortAnswer ? String(questionNumber) : "Not a short answer"}
                 disabled={!isShortAnswer}
@@ -1493,7 +1510,7 @@ const ListeningTestTaking: React.FC = () => {
 
       // Custom TipTap nodes for questions
       case "short_answer":
-        const shortAnswerQuestion = section?.listening_questions?.find(
+        const shortAnswerQuestion = currentSection?.listening_questions?.find(
           (q: any) => q.id === node.attrs.id
         );
         return (
@@ -1509,7 +1526,7 @@ const ListeningTestTaking: React.FC = () => {
         );
 
       case "mcq":
-        const mcqQuestion = section?.listening_questions?.find(
+        const mcqQuestion = currentSection?.listening_questions?.find(
           (q: any) => q.id === node.attrs.id
         );
         const options = node.attrs.options || [];
@@ -1726,36 +1743,42 @@ const ListeningTestTaking: React.FC = () => {
   };
 
   const renderTextWithInputs = (text: string, index: number) => {
-    const inputPattern = /\[\s*(\d+)\s*\]/g;
-    const parts = [];
+    const parts: React.ReactNode[] = [];
     let lastIndex = 0;
-    let match;
 
-    while ((match = inputPattern.exec(text)) !== null) {
-      // Add text before input
+    // Find all question numbers in the text
+    const questionMatches = Array.from(text.matchAll(/\[(\d+)\]/g));
+
+    questionMatches.forEach((match, matchIndex) => {
+      const questionNumber = parseInt(match[1]);
+      
+      // Find the question by question_number to get its ID
+      const question = currentSection?.listening_questions?.find(q => q.question_number === questionNumber);
+      const questionId = question?.id || questionNumber.toString();
+
+      // Add text before the match
       if (match.index > lastIndex) {
         parts.push(
-          <span key={`text-${index}-${lastIndex}`}>
+          <span key={`text-${index}-${matchIndex}`}>
             {text.substring(lastIndex, match.index)}
           </span>,
         );
       }
 
-      // Add input field
-      const questionNumber = parseInt(match[1]);
+      // Add the input field
       parts.push(
         <input
           key={`input-${index}-${questionNumber}`}
           type="text"
-          value={studentAnswers[questionNumber.toString()] || ""}
-          onChange={(e) => handleAnswerChange(questionNumber, e.target.value)}
+          value={studentAnswers[questionId] || ""}
+          onChange={(e) => handleAnswerChange(questionId, e.target.value)}
           className="inline-block min-w-[100px] max-w-[200px] px-3 py-2 mx-1 border border-gray-400 rounded bg-white text-center font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           placeholder={questionNumber.toString()}
         />,
       );
 
       lastIndex = match.index + match[0].length;
-    }
+    });
 
     // Add remaining text
     if (lastIndex < text.length) {
@@ -1772,7 +1795,7 @@ const ListeningTestTaking: React.FC = () => {
   // Helper function to extract item label from content
   const extractItemLabel = (question: any, fallbackIndex: number): string => {
     // Try to get from content first
-    if (section?.content && typeof section.content === "string") {
+    if (currentSection?.content && typeof currentSection.content === "string") {
       const questionNum = question.question_number || fallbackIndex + 1;
 
       // Look for patterns like "• Dining table: [1]" or "Dining table: [1]"
@@ -1783,7 +1806,7 @@ const ListeningTestTaking: React.FC = () => {
       ];
 
       for (const pattern of patterns) {
-        const match = section.content.match(pattern);
+        const match = currentSection.content.match(pattern);
         if (match) {
           return match[1].trim();
         }
@@ -1791,9 +1814,9 @@ const ListeningTestTaking: React.FC = () => {
     }
 
     // Try HTML parsing if available
-    if (typeof document !== "undefined" && section?.content) {
+    if (typeof document !== "undefined" && currentSection?.content) {
       const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = section.content;
+      tempDiv.innerHTML = currentSection.content;
       const textContent = tempDiv.textContent || tempDiv.innerText || "";
 
       const questionNum = question.question_number || fallbackIndex + 1;
@@ -1826,8 +1849,8 @@ const ListeningTestTaking: React.FC = () => {
   // Function to render questions directly when content is empty
   const renderQuestionsInContext = () => {
     if (
-      !section?.listening_questions ||
-      section.listening_questions.length === 0
+      !currentSection?.listening_questions ||
+      currentSection.listening_questions.length === 0
     ) {
       return (
         <div className="text-center py-8">
@@ -1836,7 +1859,7 @@ const ListeningTestTaking: React.FC = () => {
       );
     }
 
-    const questions = section.listening_questions.sort(
+    const questions = currentSection.listening_questions.sort(
       (a, b) => a.question_order - b.question_order,
     );
 
@@ -1871,18 +1894,12 @@ const ListeningTestTaking: React.FC = () => {
                       <input
                         type="text"
                         value={
-                          studentAnswers[question.id] ||
-                          studentAnswers[
-                            question.question_number?.toString()
-                          ] ||
-                          ""
+                          studentAnswers[question.id] || ""
                         }
                         onChange={(e) => {
                           setStudentAnswers((prev) => ({
                             ...prev,
                             [question.id]: e.target.value,
-                            [question.question_number?.toString()]:
-                              e.target.value,
                           }));
                         }}
                         className="inline-block w-20 h-8 border border-gray-300 rounded bg-white text-center font-medium shadow-sm focus:outline-none focus:border-blue-500 focus:shadow-md mx-1"
@@ -1903,8 +1920,8 @@ const ListeningTestTaking: React.FC = () => {
 
   const renderQuestionsDirectly = () => {
     if (
-      !section?.listening_questions ||
-      section.listening_questions.length === 0
+      !currentSection?.listening_questions ||
+      currentSection.listening_questions.length === 0
     ) {
       return (
         <div className="text-center py-8">
@@ -1913,7 +1930,7 @@ const ListeningTestTaking: React.FC = () => {
       );
     }
 
-    const questions = section.listening_questions.sort(
+    const questions = currentSection.listening_questions.sort(
       (a, b) => a.question_order - b.question_order,
     );
 
@@ -1974,18 +1991,12 @@ const ListeningTestTaking: React.FC = () => {
                             <input
                               type="text"
                               value={
-                                studentAnswers[question.id] ||
-                                studentAnswers[
-                                  question.question_number?.toString()
-                                ] ||
-                                ""
+                                studentAnswers[question.id] || ""
                               }
                               onChange={(e) => {
                                 setStudentAnswers((prev) => ({
                                   ...prev,
                                   [question.id]: e.target.value,
-                                  [question.question_number?.toString()]:
-                                    e.target.value,
                                 }));
                               }}
                               className="border border-gray-400 px-2 py-1 w-20 text-center bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -2126,7 +2137,7 @@ const ListeningTestTaking: React.FC = () => {
   };
 
   // Add comprehensive safety check
-  if (!section || !section.listening_questions) {
+  if (!currentSection || !currentSection.listening_questions) {
     console.warn("⚠️ Section or listening_questions is null/undefined");
     return (
       <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
@@ -2142,7 +2153,7 @@ const ListeningTestTaking: React.FC = () => {
   }
 
   // Safety check for content
-  const content = section.content;
+  const content = currentSection.content;
   if (!content) {
     console.warn("⚠️ Section content is null/undefined");
     return (
@@ -2159,32 +2170,47 @@ const ListeningTestTaking: React.FC = () => {
   }
 
   console.log("Section data:", {
-    hasSection: !!section,
-    hasContent: !!section.content,
-    contentLength: section.content?.length || 0,
-    questionsCount: section.listening_questions?.length || 0,
-    content: section.content,
+    hasSection: !!currentSection,
+    hasContent: !!currentSection.content,
+    contentLength: currentSection.content?.length || 0,
+    questionsCount: currentSection.listening_questions?.length || 0,
+    content: currentSection.content,
   });
 
   const parsedContent =
-    section.content && section.content.trim() !== ""
+    currentSection.content && currentSection.content.trim() !== ""
       ? (() => {
-          if (typeof section.content === "string") {
+          if (typeof currentSection.content === "string") {
             try {
-              return JSON.parse(section.content);
+              return JSON.parse(currentSection.content);
             } catch {
               // If parsing fails, treat as plain text
-              return section.content;
+              return currentSection.content;
             }
           }
-          return section.content;
+          return currentSection.content;
         })()
-      : section.listening_questions && section.listening_questions.length > 0
+      : currentSection.listening_questions && currentSection.listening_questions.length > 0
         ? null // Let renderContent handle this case
         : "No content available";
 
   return (
     <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
+      {/* Hidden Audio Element - Plays for entire test */}
+      {/* IMPORTANT: Audio continues playing across all sections without interruption */}
+      {/* This mimics real IELTS exam behavior where audio plays once for the entire test */}
+      {sections.length > 0 && sections[0].audio_url && (
+        <audio
+          ref={audioRef}
+          src={sections[0].audio_url}
+          autoPlay
+          style={{ display: 'none' }}
+          onPlay={() => setIsPlaying(true)}
+          onEnded={() => setIsPlaying(false)}
+          onError={(e) => console.error('Audio error:', e)}
+        />
+      )}
+
       {/* Exam Header - Fixed */}
       <div className="bg-white border-b-2 border-gray-300 shadow-sm flex-shrink-0 z-10">
         <div className="px-3 sm:px-4 py-2">
@@ -2197,20 +2223,18 @@ const ListeningTestTaking: React.FC = () => {
                   <h1 className="text-base sm:text-lg font-bold text-gray-900">
                     IELTS Listening Test
                   </h1>
-                  <p className="text-xs text-gray-600">Section {section.section_number}</p>
+                  <p className="text-xs text-gray-600">Section {currentSection?.section_number}</p>
                 </div>
               </div>
 
-              {/* Audio Controls */}
-              {section.audio_url && (
-                <Button
-                  onClick={toggleAudio}
-                  variant="outline"
-                  size="sm"
-                  className="flex items-center gap-1 text-xs h-8 px-2"
-                >
-                  {isPlaying ? "⏸️" : "▶️"} Audio
-                </Button>
+              {/* Audio Status Indicator */}
+              {sections.length > 0 && sections[0].audio_url && (
+                <div className="flex items-center space-x-1">
+                  <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`}></div>
+                  <span className="text-xs text-gray-600">
+                    {isPlaying ? 'Audio Playing' : 'Audio Paused'}
+                  </span>
+                </div>
               )}
             </div>
 
@@ -2246,17 +2270,6 @@ const ListeningTestTaking: React.FC = () => {
             </div>
           </div>
         </div>
-
-        {/* Hidden Audio Element */}
-        {section.audio_url && (
-          <audio
-            ref={audioRef}
-            src={section.audio_url}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            onEnded={() => setIsPlaying(false)}
-          />
-        )}
       </div>
 
       {/* Main Content Area - Full Screen */}
@@ -2274,6 +2287,59 @@ const ListeningTestTaking: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Section Navigation - Only show if multiple sections exist */}
+      {sections.length > 1 && (
+        <div className="bg-white border-t-2 border-gray-300 px-1 flex-shrink-0 h-[40px] flex items-center justify-center">
+          <div className="flex items-center justify-center space-x-1 w-full">
+            {/* Previous Section Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={previousSection}
+              disabled={currentSectionIndex === 0}
+              className="h-8 px-2"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+
+            {/* Section Buttons */}
+            {sections.map((section, index) => {
+              const isActive = index === currentSectionIndex;
+              const hasAnswers = section.listening_questions?.some((q: any) => studentAnswers[q.id]);
+              const allAnswered = section.listening_questions?.every((q: any) => studentAnswers[q.id]);
+              
+              return (
+                <Button
+                  key={section.id}
+                  variant={isActive ? "default" : "outline"}
+                  size="sm"
+                  className={`min-w-[80px] h-8 text-xs relative px-2 py-1 ${
+                    hasAnswers ? "bg-green-50 border-green-300" : ""
+                  } ${allAnswered ? "bg-green-100 border-green-400" : ""}`}
+                  onClick={() => switchSection(index)}
+                >
+                  Section {section.section_number}
+                  {allAnswered && section.listening_questions?.length > 0 && (
+                    <CheckCircle className="absolute -top-1 -right-1 w-3 h-3 text-green-600 bg-white rounded-full" />
+                  )}
+                </Button>
+              );
+            })}
+
+            {/* Next Section Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={nextSection}
+              disabled={currentSectionIndex === sections.length - 1}
+              className="h-8 px-2"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

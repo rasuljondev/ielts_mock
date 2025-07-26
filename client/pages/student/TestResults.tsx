@@ -6,6 +6,20 @@ import { Alert, AlertDescription } from '../../components/ui/alert';
 import { Badge } from '../../components/ui/badge';
 import { BracketParser } from '../../lib/bracketParser';
 import { supabase } from '../../lib/supabase';
+import { toast } from "sonner";
+
+/*
+ * DEMO FEATURES - REMOVE WHEN NOT NEEDED
+ * 
+ * This file contains demo functionality for testing purposes:
+ * - handleRetakeTest(): Allows students to reset completed tests by deleting their submission
+ * - "Reset Test (Demo)" button in the actions section
+ * 
+ * To remove demo features:
+ * 1. Delete the handleRetakeTest function
+ * 2. Remove the "Reset Test (Demo)" button from the JSX
+ * 3. Remove this comment block
+ */
 
 interface TestSubmission {
   id: string;
@@ -85,6 +99,25 @@ export default function TestResults() {
     if (score >= 80) return 'Excellent';
     if (score >= 60) return 'Good';
     return 'Needs Improvement';
+  };
+
+  // DEMO FEATURE: Allow retaking tests for demo purposes
+  const handleRetakeTest = async () => {
+    try {
+      // Delete the current submission to allow retake
+      const { error } = await supabase
+        .from('test_submissions')
+        .delete()
+        .eq('id', submissionId);
+
+      if (error) throw error;
+
+      toast.success('Test reset for retake. You can now retake the test.');
+      navigate(`/student/take-test/${submission.test_id}`);
+    } catch (err) {
+      console.error('Error resetting test:', err);
+      toast.error('Failed to reset test for retake');
+    }
   };
 
   if (isLoading) {
@@ -225,6 +258,15 @@ export default function TestResults() {
         <Button onClick={() => navigate('/student/test-history')}>
           View Test History
         </Button>
+        {submission.status === 'completed' && (
+          <Button 
+            onClick={handleRetakeTest} 
+            variant="outline"
+            className="border-red-300 text-red-600 hover:bg-red-50"
+          >
+            Reset Test (Demo)
+          </Button>
+        )}
       </div>
     </div>
   );

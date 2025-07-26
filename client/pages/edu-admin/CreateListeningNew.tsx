@@ -32,6 +32,7 @@ import {
 } from "@/lib/extensionDetection";
 import { MediaUploader, MediaFile } from "@/components/ui/media-uploader";
 import { UnifiedTestEditor } from "@/components/test-creation/UnifiedTestEditor";
+import { toast } from "sonner";
 
 interface Question {
   id: string;
@@ -108,6 +109,7 @@ const CreateListeningNew: React.FC = () => {
 
   // Update questions from editor
   const handleEditorQuestionsChange = (editorQuestions: any[]) => {
+    console.log("🔍 Processing Editor Questions:", editorQuestions);
     setEditorQuestions(editorQuestions);
     // Convert editor questions to parent Question type for summary and persistence
     const convertedQuestions = editorQuestions.map((q, index) => {
@@ -117,21 +119,99 @@ const CreateListeningNew: React.FC = () => {
         options = q.content.options;
         correctAnswer = q.content.correctAnswer;
       } else if (q.type === "matching") {
+        console.log("🔍 Processing Matching Question in handleEditorQuestionsChange:", {
+          questionId: q.id,
+          content: q.content,
+          left: q.content.left,
+          right: q.content.right,
+          leftType: typeof q.content.left,
+          rightType: typeof q.content.right,
+          leftIsArray: Array.isArray(q.content.left),
+          rightIsArray: Array.isArray(q.content.right)
+        });
+        
         // Ensure options is a JSON string of { left, right }
         if (q.content.options && typeof q.content.options !== "string") {
           options = JSON.stringify(q.content.options);
         } else {
           options = q.content.options;
         }
-        // Ensure correctAnswer is a JSON string of pairs
-        if (q.content.correct_answer && typeof q.content.correct_answer !== "string") {
-          correctAnswer = JSON.stringify(q.content.correct_answer);
+        
+        // For matching questions, create pairs from left and right arrays
+        if (q.content.left && q.content.right && Array.isArray(q.content.left) && Array.isArray(q.content.right)) {
+          const pairs = q.content.left.map((leftItem: string, index: number) => ({
+            left: leftItem,
+            right: q.content.right[index] || ""
+          }));
+          correctAnswer = JSON.stringify(pairs);
+          
+          console.log("🔍 Matching Question Extraction:", {
+            questionNumber: index + 1,
+            left: q.content.left,
+            right: q.content.right,
+            pairs,
+            correctAnswer
+          });
         } else {
-          correctAnswer = q.content.correct_answer;
+          // Fallback: try to get from correct_answer if it exists
+          if (q.content.correct_answer && typeof q.content.correct_answer !== "string") {
+            correctAnswer = JSON.stringify(q.content.correct_answer);
+          } else {
+            correctAnswer = q.content.correct_answer;
+          }
+          
+          console.log("🔍 Matching Question Fallback:", {
+            questionNumber: index + 1,
+            correctAnswer,
+            content: q.content
+          });
         }
       } else if (q.type === "short_answer") {
         options = null;
-        correctAnswer = q.content.answers;
+        // Try to get correct answer from multiple sources
+        let correctAnswerValue = null;
+        
+        // Check if answers is an array and has values
+        if (Array.isArray(q.content.answers) && q.content.answers.length > 0) {
+          correctAnswerValue = q.content.answers.join(", ");
+        } else if (q.content.correctAnswer) {
+          correctAnswerValue = q.content.correctAnswer;
+        } else if (q.content.attrs?.correctAnswer) {
+          correctAnswerValue = q.content.attrs.correctAnswer;
+        } else if (q.attrs?.correctAnswer) {
+          correctAnswerValue = q.attrs.correctAnswer;
+        } else if (q.attrs?.answers && Array.isArray(q.attrs.answers) && q.attrs.answers.length > 0) {
+          correctAnswerValue = q.attrs.answers.join(", ");
+        }
+        
+        correctAnswer = correctAnswerValue;
+        
+        console.log("🔍 Short Answer Extraction:", {
+          questionNumber: index + 1,
+          contentAnswers: q.content.answers,
+          contentCorrectAnswer: q.content.correctAnswer,
+          contentAttrsCorrectAnswer: q.content.attrs?.correctAnswer,
+          nodeAttrsCorrectAnswer: q.attrs?.correctAnswer,
+          nodeAttrsAnswers: q.attrs?.answers,
+          finalCorrectAnswer: correctAnswer
+        });
+      } else if (q.type === "map_diagram" || q.type === "map_labeling") {
+        // For map/diagram questions, save boxes as correct answer
+        if (q.content.boxes && Array.isArray(q.content.boxes)) {
+          correctAnswer = JSON.stringify(q.content.boxes);
+        } else {
+          correctAnswer = null;
+        }
+        // Force type to 'map_labeling' for DB
+        return {
+          id: q.id,
+          type: "map_labeling",
+          text: q.content.question || q.content.text || q.content.prompt || `Question ${index + 1}`,
+          options,
+          correctAnswer,
+          points: 1,
+          position: index + 1,
+        };
       }
       return {
         id: q.id,
@@ -144,6 +224,44 @@ const CreateListeningNew: React.FC = () => {
       };
     });
     setQuestions(convertedQuestions);
+  };
+
+  // Utility function to update existing questions with correct answers
+  const updateExistingQuestions = async () => {
+    try {
+      console.log("🔧 Updating existing questions with correct answers...");
+      
+      // This is a helper function to update questions that have empty correct answers
+      // You can call this from the browser console or add a button for it
+      
+      const { data: questions, error } = await supabase
+        .from("listening_questions")
+        .select("*")
+        .eq("correct_answer", '""')
+        .eq("question_type", "short_answer");
+      
+      if (error) {
+        console.error("❌ Error fetching questions:", error);
+        return;
+      }
+      
+      console.log(`🔧 Found ${questions?.length || 0} questions with empty correct answers`);
+      
+      // For each question, you would need to manually set the correct answer
+      questions?.forEach((question, index) => {
+        console.log(`🔧 Question ${index + 1}:`, {
+          id: question.id,
+          text: question.question_text,
+          currentAnswer: question.correct_answer
+        });
+      });
+      
+      toast.success(`Found ${questions?.length || 0} questions that need correct answers`);
+      
+    } catch (error) {
+      console.error("❌ Error updating questions:", error);
+      toast.error("Failed to update questions");
+    }
   };
 
   // Quick connectivity test
@@ -774,6 +892,27 @@ const CreateListeningNew: React.FC = () => {
       return;
     }
 
+    // Validate that all short answer questions have correct answers
+    const missingAnswers = editorQuestions.filter(q => {
+      if (q.type !== "short_answer") return false;
+      
+      const hasCorrectAnswer = 
+        (Array.isArray(q.content.answers) && q.content.answers.length > 0) ||
+        q.content.correctAnswer ||
+        q.content.attrs?.correctAnswer ||
+        q.attrs?.correctAnswer;
+      
+      return !hasCorrectAnswer;
+    });
+
+    if (missingAnswers.length > 0) {
+      setMessage({
+        type: "error",
+        content: `Missing correct answers for ${missingAnswers.length} short answer question(s). Please ensure all short answer questions have correct answers set.`,
+      });
+      return;
+    }
+
     setIsSaving(true);
     setMessage({ type: "", content: "" });
 
@@ -807,7 +946,7 @@ const CreateListeningNew: React.FC = () => {
       if (sectionError) throw sectionError;
 
       // Save questions
-      if (editorQuestions.length > 0) {
+      if (questions.length > 0) {
         // First delete existing questions for this section
         const { error: deleteError } = await supabase
           .from("listening_questions")
@@ -817,8 +956,7 @@ const CreateListeningNew: React.FC = () => {
         if (deleteError) throw deleteError;
 
         // Then insert new questions
-        const questionsData = editorQuestions.map((q, index) => {
-          // Map editor question types to database question types
+        const questionsData = questions.map((q, index) => {
           const dbQuestionType =
             q.type === "short_answer"
               ? "short_answer"
@@ -826,52 +964,20 @@ const CreateListeningNew: React.FC = () => {
                 ? "multiple_choice"
                 : q.type === "matching"
                   ? "matching"
-                  : q.type === "map_diagram"
+                  : q.type === "map_labeling" || q.type === "map_diagram"
                     ? "map_labeling"
                     : "short_answer"; // default
 
-          // Prepare options and answers based on question type
-          let options = null;
-          let correctAnswer = null;
-
-          if (q.type === "multiple_choice") {
-            options = JSON.stringify(q.content.options);
-            correctAnswer = q.content.options?.[q.content.correctAnswer] || "";
-          } else if (q.type === "matching") {
-            options = JSON.stringify({
-              left: q.content.pairs?.map((p: any) => p.left) || [],
-              right: q.content.pairs?.map((p: any) => p.right) || [],
-            });
-            correctAnswer = JSON.stringify(q.content.pairs);
-          } else if (q.type === "short_answer") {
-            correctAnswer = Array.isArray(q.content.answers)
-              ? q.content.answers.join(", ")
-              : q.content.correctAnswer || "";
-          } else {
-            correctAnswer = JSON.stringify(
-              q.content.correctAnswer || q.content,
-            );
-          }
-
-          // Create the question data object
-          const questionData = {
+          return {
             section_id: section.id,
-            question_text:
-              q.content.question ||
-              q.content.text ||
-              q.content.prompt ||
-              `Question ${index + 1}`,
+            question_text: q.text,
             question_type: dbQuestionType,
             question_number: index + 1,
             question_order: index + 1,
-            options: options,
-            correct_answer: correctAnswer,
-            points: 1,
+            options: q.options ? JSON.stringify(q.options) : null,
+            correct_answer: q.correctAnswer,
+            points: q.points || 1,
           };
-
-          // Fallback: If section_id doesn't work, try listening_section_id
-          // This handles databases that haven't been migrated yet
-          return questionData;
         });
         console.log('Questions to be saved:', questionsData);
 
@@ -1030,6 +1136,14 @@ const CreateListeningNew: React.FC = () => {
             className="text-blue-600 hover:text-blue-700"
           >
             🔧 Test DB
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={updateExistingQuestions}
+            className="text-purple-600 hover:text-purple-700"
+          >
+            🔄 Update QA
           </Button>
         </div>
       </div>

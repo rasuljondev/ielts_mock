@@ -212,17 +212,51 @@ const TestStart: React.FC = () => {
         .select(
           `
           id, title, section_number,
-          listening_questions(id)
+          listening_questions(id, question_type, correct_answer, options)
         `,
         )
         .eq("test_id", testId);
 
       if (error) throw error;
 
-      return (data || []).map((section) => ({
-        ...section,
-        questionCount: section.listening_questions?.length || 0,
-      }));
+      return (data || []).map((section) => {
+        // Calculate expanded question count
+        let totalQuestions = 0;
+        
+        if (section.listening_questions) {
+          section.listening_questions.forEach((question: any) => {
+            if (question.question_type === "matching") {
+              // For matching questions, count each pair as a separate question
+              try {
+                const pairs = typeof question.correct_answer === "string" 
+                  ? JSON.parse(question.correct_answer) 
+                  : question.correct_answer;
+                totalQuestions += Array.isArray(pairs) ? pairs.length : 1;
+              } catch {
+                totalQuestions += 1; // Fallback
+              }
+            } else if (question.question_type === "map_labeling" || question.question_type === "map_diagram") {
+              // For map/diagram questions, count each label/box as a separate question
+              try {
+                const boxes = typeof question.correct_answer === "string" 
+                  ? JSON.parse(question.correct_answer) 
+                  : question.correct_answer;
+                totalQuestions += Array.isArray(boxes) ? boxes.length : 1;
+              } catch {
+                totalQuestions += 1; // Fallback
+              }
+            } else {
+              // Regular questions (short_answer, multiple_choice) = 1 question each
+              totalQuestions += 1;
+            }
+          });
+        }
+        
+        return {
+          ...section,
+          questionCount: totalQuestions,
+        };
+      });
     } catch (error) {
       console.warn("Could not load listening sections:", error);
       // Check localStorage for offline data

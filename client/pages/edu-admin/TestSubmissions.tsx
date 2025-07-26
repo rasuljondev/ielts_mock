@@ -32,6 +32,7 @@ import {
   Calendar,
   Award,
   Star,
+  Trash2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { logError, classifyError } from "@/lib/errorUtils";
@@ -40,6 +41,21 @@ import SubmissionReviewModal from "@/components/admin/SubmissionReviewModal";
 import { AnswerReview } from "@/components/ui/answer-review";
 import { AnswerSubmission } from "@/components/ui/answer-submission";
 import WritingGradingModal from "@/components/admin/WritingGradingModal";
+
+/*
+ * DEMO FEATURES - REMOVE WHEN NOT NEEDED
+ * 
+ * This file contains demo functionality for testing purposes:
+ * - handleDeleteSubmission(): Allows admins to delete test submissions
+ * - "Demo Delete" button in the actions table
+ * - Trash2 icon import
+ * 
+ * To remove demo features:
+ * 1. Delete the handleDeleteSubmission function
+ * 2. Remove the "Demo Delete" button from the table actions
+ * 3. Remove Trash2 from the lucide-react imports
+ * 4. Remove this comment block
+ */
 
 interface TestSubmission {
   id: string;
@@ -78,6 +94,11 @@ const TestSubmissions: React.FC = () => {
   useEffect(() => {
     fetchSubmissions();
   }, []);
+
+  // Debug: Monitor selectedSubmission state
+  useEffect(() => {
+    console.log("🔍 selectedSubmission state changed:", selectedSubmission);
+  }, [selectedSubmission]);
 
   const fetchSubmissions = async () => {
     try {
@@ -140,13 +161,16 @@ const TestSubmissions: React.FC = () => {
         `,
         )
         .in("test_id", testIds)
-        .in("status", ["submitted", "completed", "graded"])
+        // Remove status filter to show all submissions
+        // .in("status", ["submitted", "completed", "graded"])
         .order("submitted_at", { ascending: false });
 
       if (error) {
         console.error("Error fetching submissions:", error);
         throw error;
       }
+
+      console.log("🔍 Raw submissions from database:", submissions);
 
       // Step 3: Enrich submissions with test and student data
       const data = await Promise.all(
@@ -176,6 +200,9 @@ const TestSubmissions: React.FC = () => {
         }),
       );
 
+      console.log("🔍 Enriched submissions data:", data);
+      setSubmissions(data);
+
       if (error) {
         console.error("Error fetching submissions:", error);
         logError("fetchSubmissions", error);
@@ -193,8 +220,6 @@ const TestSubmissions: React.FC = () => {
 
       console.log("Fetched submissions:", data?.length || 0, "submissions");
       console.log("Sample submission:", data?.[0]);
-
-      setSubmissions(data || []);
 
       if ((data?.length || 0) === 0) {
         console.log("No submissions found. Possible reasons:");
@@ -221,6 +246,13 @@ const TestSubmissions: React.FC = () => {
   };
 
   const openReviewModal = (submission: TestSubmission) => {
+    console.log("🔍 Opening review modal with submission:", {
+      id: submission.id,
+      testId: submission.test_id,
+      studentId: submission.student_id,
+      status: submission.status,
+      hasAnswers: !!submission.answers
+    });
     setSelectedSubmission(submission);
     setEnhancedReviewOpen(false); // Close enhanced modal if open
     setReviewModalOpen(true);
@@ -287,6 +319,28 @@ const TestSubmissions: React.FC = () => {
     fetchSubmissions(); // Refresh the list
     setReviewModalOpen(false);
     setSelectedSubmission(null);
+  };
+
+  // DEMO FEATURE: Delete submission for demo purposes
+  const handleDeleteSubmission = async (submissionId: string) => {
+    if (!confirm('Are you sure you want to delete this submission? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('test_submissions')
+        .delete()
+        .eq('id', submissionId);
+
+      if (error) throw error;
+
+      toast.success('Submission deleted successfully');
+      fetchSubmissions(); // Refresh the list
+    } catch (err) {
+      console.error('Error deleting submission:', err);
+      toast.error('Failed to delete submission');
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -503,6 +557,15 @@ const TestSubmissions: React.FC = () => {
                           >
                             <Star className="h-4 w-4 mr-2" />
                             Enhanced
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleDeleteSubmission(submission.id)}
+                            className="flex items-center gap-1"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Demo Delete
                           </Button>
                         </div>
                       </TableCell>

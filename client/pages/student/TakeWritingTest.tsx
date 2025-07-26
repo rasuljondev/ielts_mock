@@ -274,11 +274,11 @@ const TakeWritingTest: React.FC = () => {
                   IELTS Writing Test
                 </h1>
               </div>
-              {lastSaved && (
-                <span className="text-xs text-gray-500">
-                  Saved {Math.round((Date.now() - lastSaved) / 1000)}s ago
-                </span>
-              )}
+            {lastSaved && (
+              <span className="text-xs text-gray-500">
+                Saved {Math.round((Date.now() - lastSaved) / 1000)}s ago
+              </span>
+            )}
             </div>
             <div className="flex items-center gap-4">
               <Badge variant="outline">Time Left: {formatTime(timeRemaining)}</Badge>
@@ -300,7 +300,7 @@ const TakeWritingTest: React.FC = () => {
           {/* Left: Instructions/Prompt/Image */}
           <div className="bg-white rounded-lg shadow p-6 flex flex-col h-full overflow-auto min-w-[280px]">
             <h2 className="text-lg font-bold mb-2">
-              Writing Task {currentTask.task_order}: {currentTask.task_title}
+              {currentTask.task_title}
             </h2>
             <div className="mb-2">
               <span className="font-semibold">Instructions: </span>
@@ -331,12 +331,12 @@ const TakeWritingTest: React.FC = () => {
           {/* Right: Input Area */}
           <div className="bg-gray-50 rounded-lg shadow p-6 flex flex-col h-full min-w-[280px]">
             <label className="block font-semibold mb-2" htmlFor={`textarea-${currentTask.id}`}>
-              Your Answer for Writing Task {currentTask.task_order}
+              Your Answer for Task {currentTask.task_order}
             </label>
             <textarea
               id={`textarea-${currentTask.id}`}
               className="w-full flex-1 min-h-[350px] md:min-h-[400px] h-full border rounded p-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
-              placeholder={`Write your response to Writing Task ${currentTask.task_order} here...\n\nRemember to write at least ${currentTask.word_limit} words.`}
+              placeholder={`Write your response to Task ${currentTask.task_order} here...\n\nRemember to write at least ${currentTask.word_limit} words.`}
               value={answers[currentTask.id] || ""}
               onChange={(e) => handleWritingChange(currentTask.id, e.target.value)}
               disabled={submitting}
@@ -357,43 +357,43 @@ const TakeWritingTest: React.FC = () => {
         </Split>
       </div>
 
-      {/* Bottom Navigation */}
+        {/* Bottom Navigation */}
       <div className="px-6 py-4 flex flex-col md:flex-row gap-4 justify-between items-center bg-white border-t">
-        <div className="flex gap-4 w-full md:w-auto justify-center">
-          <Button
-            type="button"
-            variant={currentTaskOrder === 1 ? "default" : "outline"}
-            className="w-full md:w-auto"
-            onClick={() => setCurrentTaskOrder(1)}
-          >
-            Writing Task 1
-          </Button>
-          <Button
-            type="button"
-            variant={currentTaskOrder === 2 ? "default" : "outline"}
-            className="w-full md:w-auto"
-            onClick={() => setCurrentTaskOrder(2)}
-          >
-            Writing Task 2
-          </Button>
-        </div>
-        {currentTaskOrder === 2 && (
-          <Button
-            onClick={() => handleSubmit(false)}
-            disabled={submitting}
-            className="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white flex items-center justify-center"
-            size="lg"
-          >
-            {submitting ? (
-              <span className="flex items-center gap-2">
-                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
-                Submitting...
-              </span>
-            ) : (
-              "Submit Writing Test"
-            )}
-          </Button>
-        )}
+          <div className="flex gap-4 w-full md:w-auto justify-center">
+            <Button
+              type="button"
+              variant={currentTaskOrder === 1 ? "default" : "outline"}
+              className="w-full md:w-auto"
+              onClick={() => setCurrentTaskOrder(1)}
+            >
+              Task 1
+            </Button>
+            <Button
+              type="button"
+              variant={currentTaskOrder === 2 ? "default" : "outline"}
+              className="w-full md:w-auto"
+              onClick={() => setCurrentTaskOrder(2)}
+            >
+              Task 2
+            </Button>
+          </div>
+          {currentTaskOrder === 2 && (
+            <Button
+              onClick={() => handleSubmit(false)}
+              disabled={submitting}
+              className="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white flex items-center justify-center"
+              size="lg"
+            >
+              {submitting ? (
+                <span className="flex items-center gap-2">
+                  <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
+                  Submitting...
+                </span>
+              ) : (
+                "Submit Writing Test"
+              )}
+            </Button>
+          )}
       </div>
     </div>
   );
