@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { parseContentForStudent } from "@/lib/contentParser";
 import { Clock, Headphones, Send, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
 import { Table } from "@tiptap/extension-table";
 import TableRow from "@tiptap/extension-table-row";
 import TableCell from "@tiptap/extension-table-cell";
@@ -19,17 +20,47 @@ interface StudentAnswer {
 const ListeningTestTaking: React.FC = () => {
   const { testId } = useParams<{ testId: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   // States
   const [loading, setLoading] = useState(true);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [section, setSection] = useState<any>(null);
-  const [studentAnswers, setStudentAnswers] = useState<Record<string, string>>(
-    {},
-  );
-  const [timeLeft, setTimeLeft] = useState(3600); // 60 minutes
+  const [studentAnswers, setStudentAnswers] = useState<Record<string, string>>({});
+  const [timeLeft, setTimeLeft] = useState(3600); // 60 minutes default
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionId, setSubmissionId] = useState<string | null>(null);
+
+  // --- Unified localStorage key for all state ---
+  const localStorageKey = testId && user?.id ? `listening-test-${testId}-${user.id}` : null;
+
+  // --- Restore from localStorage on mount ---
+  useEffect(() => {
+    if (!localStorageKey) return;
+    const saved = localStorage.getItem(localStorageKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.answers) setStudentAnswers(parsed.answers);
+        if (parsed.timeLeft) setTimeLeft(parsed.timeLeft);
+      } catch {}
+    }
+  }, [localStorageKey]);
+
+  // --- Save to localStorage on every change ---
+  useEffect(() => {
+    if (!localStorageKey) return;
+    localStorage.setItem(
+      localStorageKey,
+      JSON.stringify({
+        answers: studentAnswers,
+        timeLeft,
+        testId,
+        timestamp: Date.now(),
+      })
+    );
+  }, [studentAnswers, timeLeft, localStorageKey, testId]);
 
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -176,7 +207,7 @@ const ListeningTestTaking: React.FC = () => {
     }
   };
 
-  // Load listening section
+  // Load listening section and handle time persistence
   useEffect(() => {
     const fetchSection = async (retryCount = 0) => {
       if (!testId) {
@@ -188,6 +219,9 @@ const ListeningTestTaking: React.FC = () => {
         console.log(
           `Fetching section for test ID: ${testId} (attempt ${retryCount + 1})`,
         );
+
+        // Check for saved time
+        const savedTime = localStorage.getItem(`listening-exam-time-${testId}`);
 
         // Add timeout to the request
         const controller = new AbortController();
@@ -280,6 +314,10 @@ const ListeningTestTaking: React.FC = () => {
             sectionData.listening_questions?.length || 0,
           );
           setSection(sectionData);
+
+          // Handle existing submission and time restoration
+          await handleExistingSubmission(sectionData, savedTime);
+          
           setLoading(false); // Set loading to false on success
         }
       } catch (error: any) {
@@ -348,21 +386,76 @@ const ListeningTestTaking: React.FC = () => {
     });
   }
 
-  // Timer
+  // Timer with persistence
   useEffect(() => {
-    if (timeLeft > 0) {
+    if (timeLeft > 0 && !isSubmitting) {
       const timer = setInterval(() => {
         setTimeLeft((prev) => {
-          if (prev <= 1) {
+          const newTime = prev - 1;
+
+          // Auto-submit when time runs out
+          if (newTime <= 0) {
             handleSubmit();
             return 0;
           }
-          return prev - 1;
+
+          // Save time to localStorage for persistence
+          localStorage.setItem(`listening-exam-time-${testId}`, newTime.toString());
+
+          return newTime;
         });
       }, 1000);
       return () => clearInterval(timer);
     }
-  }, [timeLeft]);
+  }, [timeLeft, isSubmitting, testId]);
+
+  // Auto-save answers periodically
+  useEffect(() => {
+    if (submissionId && Object.keys(studentAnswers).length > 0) {
+      const interval = setInterval(() => {
+        autoSaveAnswers();
+      }, 30000); // Auto-save every 30 seconds
+
+      return () => clearInterval(interval);
+    }
+  }, [submissionId, studentAnswers]);
+
+  // Fallback time restoration on component mount
+  useEffect(() => {
+    if (testId && !loading) {
+      const savedTime = localStorage.getItem(`listening-exam-time-${testId}`);
+      if (savedTime) {
+        const timeValue = parseInt(savedTime);
+        if (timeValue > 0 && timeValue !== timeLeft) {
+          console.log("Fallback time restoration:", timeValue);
+          setTimeLeft(timeValue);
+        }
+      }
+    }
+  }, [testId, loading, timeLeft]);
+
+  // Handle page visibility changes (tab switching, minimizing)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        console.log("Page hidden - time continues in background");
+      } else {
+        console.log("Page visible - checking for time updates");
+        // When page becomes visible, check if we need to sync time
+        const savedTime = localStorage.getItem(`listening-exam-time-${testId}`);
+        if (savedTime) {
+          const timeValue = parseInt(savedTime);
+          if (timeValue > 0 && Math.abs(timeValue - timeLeft) > 5) { // 5 second tolerance
+            console.log("Syncing time from localStorage:", timeValue);
+            setTimeLeft(timeValue);
+          }
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [testId, timeLeft]);
 
   useEffect(() => {
     if (section && section.listening_questions) {
@@ -370,6 +463,23 @@ const ListeningTestTaking: React.FC = () => {
       console.log("Student UI: getOrderedAnswerBlanks", getOrderedAnswerBlanks());
     }
   }, [section]);
+
+  // Debug: Log when studentAnswers changes
+  useEffect(() => {
+    console.log("studentAnswers state changed:", studentAnswers);
+    console.log("studentAnswers keys:", Object.keys(studentAnswers));
+  }, [studentAnswers]);
+
+  // Cleanup effect to prevent memory leaks and DOM manipulation errors
+  useEffect(() => {
+    return () => {
+      // Cleanup function - runs when component unmounts
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+      }
+    };
+  }, []);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -389,10 +499,181 @@ const ListeningTestTaking: React.FC = () => {
   };
 
   const handleAnswerChange = (questionNumber: number, value: string) => {
-    setStudentAnswers((prev) => ({
-      ...prev,
-      [questionNumber.toString()]: value,
-    }));
+    console.log(`Answer changed for question ${questionNumber}:`, value);
+    
+    setStudentAnswers((prev) => {
+      const newAnswers = {
+        ...prev,
+        [questionNumber.toString()]: value,
+      };
+      console.log("Updated student answers:", newAnswers);
+      return newAnswers;
+    });
+
+    // Debounced save on every answer change
+    if (submissionId) {
+      // Clear existing timeout
+      if ((window as any).saveTimeout) {
+        clearTimeout((window as any).saveTimeout);
+      }
+      
+      // Set new timeout for 2 seconds
+      (window as any).saveTimeout = setTimeout(() => {
+        console.log("Debounced save triggered for answer change");
+        autoSaveAnswers();
+      }, 2000);
+    }
+  };
+
+  // Handle existing submission and time restoration
+  const handleExistingSubmission = async (sectionData: any, savedTime: string | null) => {
+    console.log("Handling existing submission...", { savedTime, testId, userId: user?.id });
+    
+    try {
+      // Always set time first from localStorage for immediate persistence
+      const timeToUse = savedTime ? parseInt(savedTime) : 3600;
+      console.log("Setting time to:", timeToUse, "seconds");
+      setTimeLeft(timeToUse);
+
+      // Check for localStorage backup answers first
+      const localStorageAnswers = localStorage.getItem(`listening-answers-${testId}`);
+      if (localStorageAnswers) {
+        try {
+          const parsedAnswers = JSON.parse(localStorageAnswers);
+          console.log("Found localStorage backup answers:", parsedAnswers);
+          setStudentAnswers(parsedAnswers);
+        } catch (e) {
+          console.error("Failed to parse localStorage answers:", e);
+        }
+      }
+
+      // Try to check for existing submission
+      const { data: existingSubmission, error: fetchError } = await supabase
+        .from("listening_submissions")
+        .select("*")
+        .eq("test_id", testId)
+        .eq("student_id", user?.id)
+        .single();
+
+      if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = no rows returned
+        console.error("Error fetching existing submission:", fetchError);
+      }
+
+      if (existingSubmission) {
+        console.log("Found existing submission:", existingSubmission.id);
+        console.log("Submission data:", existingSubmission);
+        
+        if (existingSubmission.status === "submitted") {
+          toast.info("You have already completed this test");
+          navigate("/student/tests");
+          return;
+        }
+
+        setSubmissionId(existingSubmission.id);
+        
+        // Restore answers with detailed logging
+        const savedAnswers = existingSubmission.answers || {};
+        console.log("Restoring answers from database:", savedAnswers);
+        console.log("Answers type:", typeof savedAnswers);
+        console.log("Answers keys:", Object.keys(savedAnswers));
+        
+        // Merge with localStorage answers if available
+        if (localStorageAnswers) {
+          try {
+            const parsedLocalAnswers = JSON.parse(localStorageAnswers);
+            const mergedAnswers = { ...parsedLocalAnswers, ...savedAnswers };
+            console.log("Merged answers (localStorage + database):", mergedAnswers);
+            setStudentAnswers(mergedAnswers);
+          } catch (e) {
+            console.error("Failed to merge answers:", e);
+            setStudentAnswers(savedAnswers);
+          }
+        } else {
+          setStudentAnswers(savedAnswers);
+        }
+        
+        // Force a re-render to ensure UI updates
+        setTimeout(() => {
+          console.log("Current student answers after restoration:", studentAnswers);
+        }, 100);
+      } else {
+        console.log("No existing submission found, creating new one...");
+        
+        // Try to create new submission, but don't fail if it doesn't work
+        try {
+          const { data: newSubmission, error: submissionError } = await supabase
+            .from("listening_submissions")
+            .insert({
+              test_id: testId,
+              section_id: sectionData.id,
+              student_id: user?.id,
+              status: "in_progress",
+              started_at: new Date().toISOString(),
+              answers: {},
+            })
+            .select()
+            .single();
+
+          if (submissionError) {
+            console.error("Failed to create submission:", submissionError);
+            // Don't show error toast, just continue without submission tracking
+            console.log("Continuing without submission tracking...");
+          } else {
+            setSubmissionId(newSubmission.id);
+            console.log("Created new submission:", newSubmission.id);
+          }
+        } catch (createError) {
+          console.error("Error creating submission:", createError);
+          // Continue without submission tracking
+        }
+      }
+    } catch (error) {
+      console.error("Error in handleExistingSubmission:", error);
+      // Always ensure time is set even if everything else fails
+      const timeToUse = savedTime ? parseInt(savedTime) : 3600;
+      setTimeLeft(timeToUse);
+    }
+  };
+
+  // Auto-save answers to database
+  const autoSaveAnswers = async () => {
+    console.log("Auto-save triggered with:", { submissionId, answersCount: Object.keys(studentAnswers).length });
+    
+    if (!submissionId) {
+      console.log("No submissionId, skipping auto-save");
+      return;
+    }
+    
+    if (Object.keys(studentAnswers).length === 0) {
+      console.log("No answers to save, skipping auto-save");
+      return;
+    }
+
+    // Also save to localStorage as backup
+    localStorage.setItem(`listening-answers-${testId}`, JSON.stringify(studentAnswers));
+    console.log("Answers saved to localStorage as backup");
+
+    try {
+      console.log("Saving answers to database:", studentAnswers);
+      
+      const { data, error } = await supabase
+        .from("listening_submissions")
+        .update({
+          answers: studentAnswers,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", submissionId)
+        .select();
+
+      if (error) {
+        console.error("Auto-save error:", error);
+        console.error("Error details:", { message: error.message, details: error.details, hint: error.hint });
+      } else {
+        console.log("Answers auto-saved successfully:", data);
+      }
+    } catch (error) {
+      console.error("Auto-save failed:", error);
+    }
   };
 
   const handleSubmit = async () => {
@@ -402,27 +683,44 @@ const ListeningTestTaking: React.FC = () => {
     try {
       console.log("Submitting answers:", studentAnswers);
 
-      // Save answers to database
+      // Update existing submission or create new one
       const submissionData = {
         test_id: testId,
         section_id: section.id,
         answers: studentAnswers,
         submitted_at: new Date().toISOString(),
+        status: "submitted",
       };
 
-      const { data, error } = await supabase
-        .from("listening_submissions")
-        .insert(submissionData)
-        .select()
-        .single();
+      let result;
+      if (submissionId) {
+        // Update existing submission
+        result = await supabase
+          .from("listening_submissions")
+          .update(submissionData)
+          .eq("id", submissionId)
+          .select()
+          .single();
+      } else {
+        // Create new submission
+        result = await supabase
+          .from("listening_submissions")
+          .insert(submissionData)
+          .select()
+          .single();
+      }
 
-      if (error) {
-        console.error("Submission error:", error);
-        toast.error("Failed to submit answers: " + error.message);
+      if (result.error) {
+        console.error("Submission error:", result.error);
+        toast.error("Failed to submit answers: " + result.error.message);
         return;
       }
 
-      console.log("Submission saved:", data);
+      console.log("Submission saved:", result.data);
+      
+      // Clear saved time and answers from localStorage
+      if (localStorageKey) localStorage.removeItem(localStorageKey); // Remove all saved state
+      
       toast.success("Test submitted successfully!");
 
       // Navigate back to tests
@@ -1831,10 +2129,14 @@ const ListeningTestTaking: React.FC = () => {
   if (!section || !section.listening_questions) {
     console.warn("⚠️ Section or listening_questions is null/undefined");
     return (
-      <div className="text-center py-8">
-        <p className="text-gray-500 mb-4">
-          Loading test data...
-        </p>
+      <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <p className="text-gray-500 mb-4">
+              Loading test data...
+            </p>
+          </div>
+        </div>
       </div>
     );
   }
@@ -1844,10 +2146,14 @@ const ListeningTestTaking: React.FC = () => {
   if (!content) {
     console.warn("⚠️ Section content is null/undefined");
     return (
-      <div className="text-center py-8">
-        <p className="text-gray-500 mb-4">
-          No content available for this test.
-        </p>
+      <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <p className="text-gray-500 mb-4">
+              No content available for this test.
+            </p>
+          </div>
+        </div>
       </div>
     );
   }
@@ -1878,103 +2184,95 @@ const ListeningTestTaking: React.FC = () => {
         : "No content available";
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-6xl mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate("/student/tests")}
-              >
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back
-              </Button>
-              <div>
-                <h1 className="text-xl font-bold flex items-center gap-2">
-                  <Headphones className="h-5 w-5" />
-                  IELTS Listening Test
-                </h1>
-                <p className="text-gray-600 text-sm">
-                  Section {section.section_number}
-                </p>
+    <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
+      {/* Exam Header - Fixed */}
+      <div className="bg-white border-b-2 border-gray-300 shadow-sm flex-shrink-0 z-10">
+        <div className="px-3 sm:px-4 py-2">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-2 sm:space-y-0">
+            {/* Left: Test Info */}
+            <div className="flex items-center space-x-2 sm:space-x-3">
+              <div className="flex items-center space-x-2">
+                <Headphones className="h-4 w-4 sm:h-5 sm:w-5 text-blue-600" />
+                <div>
+                  <h1 className="text-base sm:text-lg font-bold text-gray-900">
+                    IELTS Listening Test
+                  </h1>
+                  <p className="text-xs text-gray-600">Section {section.section_number}</p>
+                </div>
               </div>
-            </div>
 
-            <div className="flex items-center gap-4">
+              {/* Audio Controls */}
               {section.audio_url && (
                 <Button
                   onClick={toggleAudio}
                   variant="outline"
                   size="sm"
-                  className="flex items-center gap-2"
+                  className="flex items-center gap-1 text-xs h-8 px-2"
                 >
                   {isPlaying ? "⏸️" : "▶️"} Audio
                 </Button>
               )}
+            </div>
 
-              <div className="flex items-center gap-2 text-red-600">
-                <Clock className="h-4 w-4" />
-                <span className="font-mono text-lg font-semibold">
-                  {formatTime(timeLeft)}
-                </span>
+            {/* Right: Timer and Controls */}
+            <div className="flex items-center space-x-2 sm:space-x-4">
+              {/* Timer */}
+              <div className="text-center bg-gray-50 rounded-lg px-2 sm:px-3 py-1 border">
+                <div className="text-xs font-medium text-gray-700">
+                  Time Remaining
+                </div>
+                <div className="flex items-center space-x-1">
+                  <Clock className="h-3 w-3 sm:h-4 sm:w-4 text-orange-500" />
+                  <span
+                    className={`font-mono text-sm sm:text-base font-bold ${
+                      timeLeft < 600 ? "text-red-600" : "text-gray-900"
+                    }`}
+                  >
+                    {formatTime(timeLeft)}
+                  </span>
+                </div>
               </div>
 
+              {/* Submit Button */}
               <Button
                 onClick={handleSubmit}
                 disabled={isSubmitting}
-                className="bg-green-600 hover:bg-green-700"
+                size="sm"
+                className="bg-red-600 hover:bg-red-700 text-white font-semibold px-3 sm:px-4 text-xs h-8"
               >
-                <Send className="h-4 w-4 mr-2" />
+                <Send className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
                 {isSubmitting ? "Submitting..." : "Submit Test"}
               </Button>
             </div>
           </div>
-
-          {section.audio_url && (
-            <audio
-              ref={audioRef}
-              src={section.audio_url}
-              onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
-              onEnded={() => setIsPlaying(false)}
-            />
-          )}
         </div>
+
+        {/* Hidden Audio Element */}
+        {section.audio_url && (
+          <audio
+            ref={audioRef}
+            src={section.audio_url}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onEnded={() => setIsPlaying(false)}
+          />
+        )}
       </div>
 
-      {/* Content */}
-      <div className="max-w-6xl mx-auto px-6 py-8">
-        <Card>
-          <CardContent className="p-8">
-            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <h3 className="font-semibold text-blue-800 mb-2">Instructions</h3>
-              <p className="text-blue-700 text-sm">
-                Listen to the audio and answer all questions. Write your answers
-                in the numbered boxes.
-              </p>
-            </div>
+      {/* Main Content Area - Full Screen */}
+      <div className="flex-1 overflow-hidden">
+        <div className="h-full bg-white">
+          <div className="h-full flex flex-col">
 
-            {renderContent(parsedContent)}
-          </CardContent>
-        </Card>
 
-        {/* Submit Section */}
-        {section.listening_questions &&
-          section.listening_questions.length > 0 && (
-            <div className="mt-6 text-center">
-              <Button
-                onClick={handleSubmit}
-                disabled={isSubmitting}
-                className="bg-green-600 hover:bg-green-700 text-white px-8 py-2"
-              >
-                <Send className="h-4 w-4 mr-2" />
-                {isSubmitting ? "Submitting..." : "Submit Answers"}
-              </Button>
+            {/* Content Area - Scrollable */}
+            <div className="flex-1 overflow-auto p-3 sm:p-6">
+              <div className="w-full">
+                {renderContent(parsedContent)}
+              </div>
             </div>
-          )}
+          </div>
+        </div>
       </div>
     </div>
   );

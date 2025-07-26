@@ -1,20 +1,18 @@
 import React from "react";
-import { Navigation } from "@/components/ui/navigation";
 import { TestingHelper } from "@/components/ui/testing-helper";
 
-interface AppLayoutProps {
+interface TestLayoutProps {
   children: React.ReactNode;
-  hideNavigation?: boolean;
 }
 
-export const AppLayout: React.FC<AppLayoutProps> = ({ children, hideNavigation = false }) => {
+export const TestLayout: React.FC<TestLayoutProps> = ({ children }) => {
   return (
     <div className="min-h-screen bg-gray-50">
-      {!hideNavigation && <Navigation />}
+      {/* No Navigation for test-taking pages */}
       <main>{children}</main>
 
       {/* Testing Helper - Remove in production */}
       {process.env.NODE_ENV === 'development' && <TestingHelper />}
     </div>
   );
-};
+}; 

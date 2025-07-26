@@ -263,29 +263,32 @@ const TakeWritingTest: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
       {/* Sticky Timer */}
-      <div className="sticky top-0 z-10 bg-white border-b shadow-sm">
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-          <h1 className="text-xl font-semibold">IELTS Writing Test</h1>
-          <div className="flex items-center gap-4">
-            <Badge variant="outline">Time Left: {formatTime(timeRemaining)}</Badge>
-            {lastSaved && (
-              <span className="text-xs text-gray-500">
-                Saved {Math.round((Date.now() - lastSaved) / 1000)}s ago
-              </span>
-            )}
+      <div className="bg-white border-b-2 border-gray-300 shadow-sm flex-shrink-0 z-10">
+        <div className="px-3 sm:px-4 py-2">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-2 sm:space-y-0">
+            <div className="flex items-center space-x-2 sm:space-x-3">
+              <div className="flex items-center space-x-2">
+                <h1 className="text-base sm:text-lg font-bold text-gray-900">
+                  IELTS Writing Test
+                </h1>
+              </div>
+              {lastSaved && (
+                <span className="text-xs text-gray-500">
+                  Saved {Math.round((Date.now() - lastSaved) / 1000)}s ago
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-4">
+              <Badge variant="outline">Time Left: {formatTime(timeRemaining)}</Badge>
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 max-w-4xl mx-auto p-6 w-full flex flex-col">
-        {uiError && (
-          <div className="mb-4 p-4 bg-red-100 border border-red-300 text-red-700 rounded">
-            <strong>Error:</strong> {uiError}
-          </div>
-        )}
-        {/* Split Screen for Current Task */}
+      {/* Main Content Area - Full Screen Split */}
+      <div className="flex-1 flex overflow-hidden">
         <Split
           className="flex-1 flex gap-4"
           minSize={200}
@@ -295,9 +298,9 @@ const TakeWritingTest: React.FC = () => {
           style={{ height: "100%" }}
         >
           {/* Left: Instructions/Prompt/Image */}
-          <div className="bg-white rounded-lg shadow p-6 flex flex-col h-full overflow-auto">
+          <div className="bg-white rounded-lg shadow p-6 flex flex-col h-full overflow-auto min-w-[280px]">
             <h2 className="text-lg font-bold mb-2">
-              Task {currentTask.task_order}: {currentTask.task_title}
+              Writing Task {currentTask.task_order}: {currentTask.task_title}
             </h2>
             <div className="mb-2">
               <span className="font-semibold">Instructions: </span>
@@ -326,19 +329,19 @@ const TakeWritingTest: React.FC = () => {
           </div>
 
           {/* Right: Input Area */}
-          <div className="bg-gray-50 rounded-lg shadow p-6 flex flex-col h-full">
+          <div className="bg-gray-50 rounded-lg shadow p-6 flex flex-col h-full min-w-[280px]">
             <label className="block font-semibold mb-2" htmlFor={`textarea-${currentTask.id}`}>
-              Your Answer for Task {currentTask.task_order}
+              Your Answer for Writing Task {currentTask.task_order}
             </label>
             <textarea
               id={`textarea-${currentTask.id}`}
-              className="w-full min-h-[300px] h-full border rounded p-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
-              placeholder={`Write your response to Task ${currentTask.task_order} here...\n\nRemember to write at least ${currentTask.word_limit} words.`}
+              className="w-full flex-1 min-h-[350px] md:min-h-[400px] h-full border rounded p-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+              placeholder={`Write your response to Writing Task ${currentTask.task_order} here...\n\nRemember to write at least ${currentTask.word_limit} words.`}
               value={answers[currentTask.id] || ""}
               onChange={(e) => handleWritingChange(currentTask.id, e.target.value)}
               disabled={submitting}
               maxLength={5000}
-              style={{ flex: 1 }}
+              style={{ minHeight: '350px', height: '100%', flex: 1 }}
             />
             <div className="flex justify-between text-sm text-gray-600 mt-1">
               <span>Min. words: {currentTask.word_limit}</span>
@@ -352,45 +355,45 @@ const TakeWritingTest: React.FC = () => {
             </div>
           </div>
         </Split>
+      </div>
 
-        {/* Bottom Navigation */}
-        <div className="mt-8 flex flex-col md:flex-row gap-4 justify-between items-center">
-          <div className="flex gap-4 w-full md:w-auto justify-center">
-            <Button
-              type="button"
-              variant={currentTaskOrder === 1 ? "default" : "outline"}
-              className="w-full md:w-auto"
-              onClick={() => setCurrentTaskOrder(1)}
-            >
-              Task 1
-            </Button>
-            <Button
-              type="button"
-              variant={currentTaskOrder === 2 ? "default" : "outline"}
-              className="w-full md:w-auto"
-              onClick={() => setCurrentTaskOrder(2)}
-            >
-              Task 2
-            </Button>
-          </div>
-          {currentTaskOrder === 2 && (
-            <Button
-              onClick={() => handleSubmit(false)}
-              disabled={submitting}
-              className="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white flex items-center justify-center"
-              size="lg"
-            >
-              {submitting ? (
-                <span className="flex items-center gap-2">
-                  <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
-                  Submitting...
-                </span>
-              ) : (
-                "Submit Writing Test"
-              )}
-            </Button>
-          )}
+      {/* Bottom Navigation */}
+      <div className="px-6 py-4 flex flex-col md:flex-row gap-4 justify-between items-center bg-white border-t">
+        <div className="flex gap-4 w-full md:w-auto justify-center">
+          <Button
+            type="button"
+            variant={currentTaskOrder === 1 ? "default" : "outline"}
+            className="w-full md:w-auto"
+            onClick={() => setCurrentTaskOrder(1)}
+          >
+            Writing Task 1
+          </Button>
+          <Button
+            type="button"
+            variant={currentTaskOrder === 2 ? "default" : "outline"}
+            className="w-full md:w-auto"
+            onClick={() => setCurrentTaskOrder(2)}
+          >
+            Writing Task 2
+          </Button>
         </div>
+        {currentTaskOrder === 2 && (
+          <Button
+            onClick={() => handleSubmit(false)}
+            disabled={submitting}
+            className="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white flex items-center justify-center"
+            size="lg"
+          >
+            {submitting ? (
+              <span className="flex items-center gap-2">
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
+                Submitting...
+              </span>
+            ) : (
+              "Submit Writing Test"
+            )}
+          </Button>
+        )}
       </div>
     </div>
   );

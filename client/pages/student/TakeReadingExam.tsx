@@ -95,6 +95,36 @@ const TakeReadingExam: React.FC = () => {
   const [passages, setPassages] = useState<ReadingPassage[]>([]);
   const [allQuestions, setAllQuestions] = useState<Question[]>([]);
 
+  // --- Unified localStorage key for all state ---
+  const localStorageKey = testId && user?.id ? `reading-test-${testId}-${user.id}` : null;
+
+  // --- Restore from localStorage on mount ---
+  useEffect(() => {
+    if (!localStorageKey) return;
+    const saved = localStorage.getItem(localStorageKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.answers) setAnswers(parsed.answers);
+        if (parsed.timeRemaining) setTimeRemaining(parsed.timeRemaining);
+      } catch {}
+    }
+  }, [localStorageKey]);
+
+  // --- Save to localStorage on every change ---
+  useEffect(() => {
+    if (!localStorageKey) return;
+    localStorage.setItem(
+      localStorageKey,
+      JSON.stringify({
+        answers,
+        timeRemaining,
+        testId,
+        timestamp: Date.now(),
+      })
+    );
+  }, [answers, timeRemaining, localStorageKey, testId]);
+
   // Auto-save interval
   useEffect(() => {
     if (submissionId && Object.keys(answers).length > 0) {
@@ -337,6 +367,7 @@ const TakeReadingExam: React.FC = () => {
 
       // Clear saved time
       localStorage.removeItem(`exam-time-${testId}`);
+      localStorageKey && localStorage.removeItem(localStorageKey);
 
       toast.success("Test submitted successfully!");
       navigate("/student/tests/history");
@@ -470,7 +501,7 @@ const TakeReadingExam: React.FC = () => {
             value={answer || ""}
             onChange={(e) => updateAnswer(question.id, e.target.value)}
             placeholder="Type your answer here..."
-            className="text-base p-3"
+            className="h-7 w-40 text-sm px-2 py-1 rounded border border-gray-300 focus:ring-2 focus:ring-blue-500"
           />
         );
 
@@ -532,49 +563,48 @@ const TakeReadingExam: React.FC = () => {
     <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
       {/* Exam Header - Fixed */}
       <div className="bg-white border-b-2 border-gray-300 shadow-sm flex-shrink-0 z-10">
-        <div className="px-6 py-4">
-          <div className="flex items-center justify-between">
+        <div className="px-3 sm:px-4 py-2">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-2 sm:space-y-0">
             {/* Left: Test Info */}
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-2 sm:space-x-3">
               <div className="flex items-center space-x-2">
-                <FileText className="h-6 w-6 text-blue-600" />
+                <FileText className="h-4 w-4 sm:h-5 sm:w-5 text-blue-600" />
                 <div>
-                  <h1 className="text-xl font-bold text-gray-900">
+                  <h1 className="text-base sm:text-lg font-bold text-gray-900">
                     {test.title}
                   </h1>
-                  <p className="text-sm text-gray-600">Reading Test</p>
+                  <p className="text-xs text-gray-600">Reading Test</p>
                 </div>
               </div>
-
               {autoSaving && (
-                <div className="flex items-center gap-2 text-sm text-blue-600">
-                  <Save className="h-4 w-4 animate-pulse" />
+                <div className="flex items-center gap-2 text-xs text-blue-600">
+                  <Save className="h-3 w-3 animate-pulse" />
                   <span>Auto-saving...</span>
                 </div>
               )}
             </div>
 
             {/* Right: Timer and Controls */}
-            <div className="flex items-center space-x-6">
+            <div className="flex items-center space-x-2 sm:space-x-4">
               {/* Progress */}
               <div className="text-center">
-                <div className="text-sm font-medium text-gray-700">
+                <div className="text-xs font-medium text-gray-700">
                   Questions Answered
                 </div>
-                <div className="text-lg font-bold">
+                <div className="text-base font-bold">
                   {answeredQuestions} / {totalQuestions}
                 </div>
               </div>
 
               {/* Timer */}
-              <div className="text-center bg-gray-50 rounded-lg px-4 py-2 border">
-                <div className="text-sm font-medium text-gray-700 mb-1">
+              <div className="text-center bg-gray-50 rounded-lg px-2 py-1 border">
+                <div className="text-xs font-medium text-gray-700">
                   Time Remaining
                 </div>
-                <div className="flex items-center space-x-2">
-                  <Clock className="h-5 w-5 text-orange-500" />
+                <div className="flex items-center space-x-1">
+                  <Clock className="h-4 w-4 text-orange-500" />
                   <span
-                    className={`font-mono text-xl font-bold ${
+                    className={`font-mono text-base font-bold ${
                       timeRemaining < 600 ? "text-red-600" : "text-gray-900"
                     }`}
                   >
@@ -587,11 +617,11 @@ const TakeReadingExam: React.FC = () => {
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button
-                    size="lg"
-                    className="bg-red-600 hover:bg-red-700 text-white font-semibold px-6"
+                    size="sm"
+                    className="bg-red-600 hover:bg-red-700 text-white font-semibold px-3 h-8"
                   >
-                    <Send className="h-5 w-5 mr-2" />
-                    Submit Test
+                    <Send className="h-4 w-4 mr-1" />
+                    Submit
                   </Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
@@ -670,141 +700,57 @@ const TakeReadingExam: React.FC = () => {
 
         {/* Right Panel - Questions */}
         <div className="w-1/2 bg-gray-50 overflow-hidden">
-          <div className="h-full flex flex-col">
-            {/* Question Header */}
-            <div className="bg-white border-b border-gray-300 px-6 py-4 flex-shrink-0">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-bold text-gray-900">
-                  Question {currentQuestionIndex + 1} of{" "}
-                  {passageQuestions.length}
-                </h3>
-                <Badge
-                  variant={
-                    answers[currentQuestion?.id || ""] ? "default" : "outline"
-                  }
-                  className={
-                    answers[currentQuestion?.id || ""] ? "bg-green-600" : ""
-                  }
-                >
-                  {answers[currentQuestion?.id || ""]
-                    ? "Answered"
-                    : "Not Answered"}
-                </Badge>
-              </div>
-
-              {/* Question Navigation */}
-              <div className="flex items-center justify-between">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigateToQuestion(currentQuestionIndex - 1)}
-                  disabled={currentQuestionIndex === 0}
-                >
-                  <ChevronLeft className="h-4 w-4 mr-1" />
-                  Previous
-                </Button>
-
-                <div className="flex space-x-1">
-                  {passageQuestions.map((q, index) => (
-                    <Button
-                      key={q.id}
-                      variant={
-                        index === currentQuestionIndex ? "default" : "outline"
-                      }
-                      size="sm"
-                      className={`w-10 h-10 p-0 ${
-                        answers[q.id] ? "bg-green-100 border-green-300" : ""
-                      }`}
-                      onClick={() => navigateToQuestion(index)}
+          {/* All passage questions in a single scrollable view */}
+          <ScrollArea className="h-full p-4 space-y-4">
+            {passageQuestions.map((q, idx) => (
+              <Card key={q.id} className={`border-2 ${answers[q.id] ? 'border-green-400' : ''} my-1 py-0`}>
+                <CardContent className="p-2 flex flex-col gap-1 justify-center items-start min-h-0">
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold text-gray-900 text-lg">
+                      {idx + 1}. {q.question_text}
+                    </div>
+                    <Badge
+                      variant={answers[q.id] ? 'default' : 'outline'}
+                      className={answers[q.id] ? 'bg-green-600' : ''}
                     >
-                      {index + 1}
-                      {answers[q.id] && (
-                        <CheckCircle className="absolute -top-1 -right-1 w-3 h-3 text-green-600" />
-                      )}
-                    </Button>
-                  ))}
-                </div>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigateToQuestion(currentQuestionIndex + 1)}
-                  disabled={
-                    currentQuestionIndex === passageQuestions.length - 1
-                  }
-                >
-                  Next
-                  <ChevronRight className="h-4 w-4 ml-1" />
-                </Button>
+                      {answers[q.id] ? 'Answered' : 'Not Answered'}
+                    </Badge>
+                  </div>
+                  {renderQuestionInput(q)}
+                </CardContent>
+              </Card>
+            ))}
+            {passageQuestions.length === 0 && (
+              <div className="text-center py-12 text-gray-500">
+                <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>No questions available for this passage.</p>
               </div>
-            </div>
-
-            {/* Question Content */}
-            <ScrollArea className="flex-1 p-6">
-              {currentQuestion ? (
-                <motion.div
-                  key={currentQuestion.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="space-y-6"
-                >
-                  <Card className="border-2">
-                    <CardContent className="p-6">
-                      <div className="space-y-6">
-                        <div className="prose max-w-none">
-                          <p className="text-lg leading-relaxed font-medium">
-                            {currentQuestion.question_text}
-                          </p>
-                        </div>
-
-                        {renderQuestionInput(currentQuestion)}
-                      </div>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              ) : (
-                <div className="text-center py-12 text-gray-500">
-                  <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No question available</p>
-                </div>
-              )}
-            </ScrollArea>
-          </div>
+            )}
+          </ScrollArea>
         </div>
       </div>
 
-      {/* Bottom Navigation - Passage Selector */}
-      <div className="bg-white border-t-2 border-gray-300 py-3 px-6 flex-shrink-0">
-        <div className="flex items-center justify-center space-x-4">
+      {/* Compact Bottom Navigation - Passage Selector */}
+      <div className="bg-white border-t-2 border-gray-300 px-1 flex-shrink-0 h-[40px] flex items-center justify-center">
+        <div className="flex items-center justify-center space-x-1 w-full">
           {passages.map((passage) => {
             const isActive = passage.number === currentPassage;
             const hasAnswers = passage.questions.some((q) => answers[q.id]);
             const allAnswered = passage.questions.every((q) => answers[q.id]);
-
             return (
               <Button
                 key={passage.number}
                 variant={isActive ? "default" : "outline"}
-                size="lg"
-                className={`min-w-[160px] h-14 relative ${
+                size="sm"
+                className={`min-w-[80px] h-8 text-xs relative px-2 py-1 ${
                   hasAnswers ? "bg-green-50 border-green-300" : ""
                 } ${allAnswered ? "bg-green-100 border-green-400" : ""}`}
                 onClick={() => switchPassage(passage.number)}
                 disabled={passage.questions.length === 0}
               >
-                <div className="text-center">
-                  <div className="font-bold text-base">
-                    Passage {passage.number}
-                  </div>
-                  <div className="text-xs opacity-75">
-                    {passage.questions.filter((q) => answers[q.id]).length} /{" "}
-                    {passage.questions.length} answered
-                  </div>
-                </div>
-
+                Passage {passage.number}
                 {allAnswered && passage.questions.length > 0 && (
-                  <CheckCircle className="absolute -top-2 -right-2 w-5 h-5 text-green-600 bg-white rounded-full" />
+                  <CheckCircle className="absolute -top-1 -right-1 w-3 h-3 text-green-600 bg-white rounded-full" />
                 )}
               </Button>
             );

@@ -18,6 +18,7 @@ import { logError, classifyError } from "@/lib/errorUtils";
 import { isSessionMissingError } from "@/lib/authErrorHandler";
 import { toast } from "sonner";
 import { AppLayout } from "./components/layout/AppLayout";
+import { TestLayout } from "./components/layout/TestLayout";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import {
   PageTransition,
@@ -199,9 +200,18 @@ const AuthRedirect = () => {
 
 function AppRoutes() {
   const location = useLocation();
+  
+  // Check if current route is a test-taking route
+  const isTestTakingRoute = location.pathname.includes('/student/test/') && 
+    (location.pathname.includes('/listening') || 
+     location.pathname.includes('/reading') || 
+     location.pathname.includes('/writing') ||
+     location.pathname.includes('/TakeTestNew'));
+
+  const Layout = isTestTakingRoute ? TestLayout : AppLayout;
 
   return (
-    <AppLayout>
+    <Layout>
       <AnimatePresence mode="wait">
         <Routes location={location} key={location.pathname}>
           {/* Public Routes */}
@@ -309,7 +319,13 @@ function AppRoutes() {
           />
           <Route
             path="/student/test/:testId/listening"
-            element={<ListeningTestTaking />}
+            element={
+              <ProtectedRoute allowedRoles={["student"]}>
+                <PageTransition>
+                  <ListeningTestTaking />
+                </PageTransition>
+              </ProtectedRoute>
+            }
           />
           <Route
             path="/student/test-results/:submissionId"
@@ -557,7 +573,7 @@ function AppRoutes() {
           />
         </Routes>
       </AnimatePresence>
-    </AppLayout>
+    </Layout>
   );
 }
 
