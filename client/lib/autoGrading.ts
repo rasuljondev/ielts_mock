@@ -183,6 +183,105 @@ const calculateOverallBandScore = (
   return Math.round(average * 2) / 2;
 };
 
+// Helper function to map dynamic question IDs to database question IDs
+const mapDynamicIdToDatabaseId = (dynamicId: string, questions: any[]): string | null => {
+  // Extract the question type and timestamp from the dynamic ID
+  const parts = dynamicId.split('_');
+  if (parts.length < 2) return null;
+  
+  const questionType = parts[0]; // mcq, q, matching, map, etc.
+  const timestamp = parts[1];
+  
+  console.log(`🔍 Mapping dynamic ID: ${dynamicId} (type: ${questionType}, timestamp: ${timestamp})`);
+  
+  // Find the question that matches this dynamic ID
+  // We'll use the question type and try to match by content similarity
+  const matchingQuestion = questions.find(question => {
+    // For MCQ questions, check if the question type matches
+    if (questionType === 'mcq' && question.question_type === 'multiple_choice') {
+      return true;
+    }
+    // For short answer questions, check if the question type matches
+    if (questionType === 'q' && question.question_type === 'short_answer') {
+      return true;
+    }
+    // For matching questions, check if the question type matches
+    if (questionType === 'matching' && question.question_type === 'matching') {
+      return true;
+    }
+    // For map questions, check if the question type matches
+    if (questionType === 'map' && question.question_type === 'map_labeling') {
+      return true;
+    }
+    return false;
+  });
+  
+  if (matchingQuestion) {
+    console.log(`🔍 Found matching question: ${matchingQuestion.id} (${matchingQuestion.question_type})`);
+    return matchingQuestion.id;
+  }
+  
+  console.log(`🔍 No matching question found for dynamic ID: ${dynamicId}`);
+  return null;
+};
+
+// Helper function to find student answer for a question, handling both database IDs and dynamic IDs
+const findStudentAnswer = (question: any, userAnswers: any): any => {
+  const questionId = question.id;
+  
+  // First, try to find answer using the database question ID
+  if (userAnswers[questionId]) {
+    console.log(`🔍 Found answer using database ID ${questionId}:`, userAnswers[questionId]);
+    return userAnswers[questionId];
+  }
+  
+  // If not found, try to find answer using dynamic ID patterns
+  const answerKeys = Object.keys(userAnswers);
+  
+  // For MCQ questions, look for mcq_* keys
+  if (question.question_type === 'multiple_choice') {
+    const mcqKey = answerKeys.find(key => key.startsWith('mcq_'));
+    if (mcqKey) {
+      console.log(`🔍 Found MCQ answer using dynamic key ${mcqKey}:`, userAnswers[mcqKey]);
+      return userAnswers[mcqKey];
+    }
+  }
+  
+  // For short answer questions, look for q_* keys
+  if (question.question_type === 'short_answer') {
+    const shortAnswerKey = answerKeys.find(key => key.startsWith('q_'));
+    if (shortAnswerKey) {
+      console.log(`🔍 Found short answer using dynamic key ${shortAnswerKey}:`, userAnswers[shortAnswerKey]);
+      return userAnswers[shortAnswerKey];
+    }
+  }
+  
+  // For matching questions, we'll handle them separately in the main processing
+  // Just return null here and let the main logic handle it
+  if (question.question_type === 'matching') {
+    console.log(`🔍 Matching question - will be handled in main processing`);
+    return null;
+  }
+  
+  // For map questions, collect all map_* keys
+  if (question.question_type === 'map_labeling') {
+    const mapKeys = answerKeys.filter(key => key.startsWith('map_'));
+    if (mapKeys.length > 0) {
+      const mapAnswers = mapKeys.map(key => ({
+        key: key,
+        answer: userAnswers[key]
+      }));
+      console.log(`🔍 Found map answers using dynamic keys:`, mapAnswers);
+      return mapAnswers;
+    }
+  }
+  
+  console.log(`🔍 No answer found for question ${questionId} (${question.question_type})`);
+  return null;
+};
+
+
+
 // Main grading function
 export const autoGradeSubmission = async (
   submissionId: string,
@@ -198,6 +297,14 @@ export const autoGradeSubmission = async (
     if (submissionError) throw submissionError;
 
     const userAnswers = submission.answers || {};
+    
+    console.log("🔍 Auto-grading - User answers from submission:", {
+      submissionId: submission.id,
+      userAnswers,
+      userAnswersType: typeof userAnswers,
+      userAnswersKeys: Object.keys(userAnswers),
+      userAnswersCount: Object.keys(userAnswers).length
+    });
     
     // Get test questions for all sections
     const [readingData, listeningData, writingData] = await Promise.all([
@@ -242,15 +349,71 @@ export const autoGradeSubmission = async (
       ) || [];
 
     const readingResults = readingQuestions.map((question: any) => {
-      const userAnswer = userAnswers[question.id];
-      const isCorrect = answersMatch(userAnswer, question.correct_answer);
+      // Use the same helper function for reading questions
+      const userAnswer = findStudentAnswer(question, userAnswers);
+      let correctAnswer = question.correct_answer;
+      
+      // Special handling for MCQ questions
+      if (question.question_type === "multiple_choice") {
+        console.log("🔍 Processing Reading MCQ Question:", {
+          questionId: question.id,
+          correctAnswer: correctAnswer,
+          correctAnswerType: typeof correctAnswer,
+          options: question.options,
+          userAnswer: userAnswer
+        });
+        
+        // For MCQ questions, the correct_answer is stored as an index
+        // but the student answer is stored as the actual option text
+        // We need to convert the index to the actual option text for comparison
+        try {
+          let options = question.options;
+          if (typeof options === "string") {
+            options = JSON.parse(options);
+          }
+          
+          if (Array.isArray(options) && options.length > 0) {
+            const correctIndex = parseInt(correctAnswer);
+            if (!isNaN(correctIndex) && correctIndex >= 0 && correctIndex < options.length) {
+              correctAnswer = options[correctIndex];
+              console.log("🔍 Converted Reading MCQ index to option text:", {
+                originalIndex: correctAnswer,
+                convertedAnswer: correctAnswer,
+                options: options
+              });
+            } else {
+              console.warn("🔍 Invalid Reading MCQ correct answer index:", {
+                correctAnswer,
+                optionsLength: options.length
+              });
+            }
+          } else {
+            console.warn("🔍 Reading MCQ question has no valid options:", {
+              questionId: question.id,
+              options: question.options
+            });
+          }
+        } catch (error) {
+          console.error("🔍 Error processing Reading MCQ options:", error);
+        }
+      }
+      
+      const isCorrect = answersMatch(userAnswer, correctAnswer);
+      
+      console.log("🔍 Reading Question grading result:", {
+        questionId: question.id,
+        questionType: question.question_type,
+        userAnswer,
+        correctAnswer,
+        isCorrect
+      });
       
       return {
         questionId: question.id,
         questionText: question.question_text,
         questionType: question.question_type,
         userAnswer,
-        correctAnswer: question.correct_answer,
+        correctAnswer: correctAnswer,
         isCorrect,
         points: isCorrect ? question.points || 1 : 0,
         section: "reading" as const,
@@ -268,20 +431,40 @@ export const autoGradeSubmission = async (
     let questionCounter = 1; // Track sequential question numbers
     
     listeningQuestions.forEach((question: any) => {
+      console.log("🔍 Processing listening question:", {
+        questionId: question.id,
+        questionType: question.question_type,
+        questionText: question.question_text
+      });
+      
+      // Use the new helper function to find student answer
+      const userAnswer = findStudentAnswer(question, userAnswers);
+      
       // Handle different question types
       if (question.question_type === "map_labeling" || question.question_type === "map_diagram") {
-        // Map/diagram questions: each box is a separate question
+        // Map/diagram questions: userAnswer is now an array from findStudentAnswer
         console.log("🔍 Processing Map Question:", {
           questionId: question.id,
           questionType: question.question_type,
           correctAnswer: question.correct_answer,
-          correctAnswerType: typeof question.correct_answer
+          correctAnswerType: typeof question.correct_answer,
+          userAnswer: userAnswer
         });
         
         try {
-          const mapData = typeof question.correct_answer === "string" 
-            ? JSON.parse(question.correct_answer) 
-            : question.correct_answer;
+          let mapData;
+          try {
+            if (typeof question.correct_answer === "string") {
+              // Handle escaped JSON strings from the database
+              mapData = JSON.parse(question.correct_answer);
+            } else {
+              mapData = question.correct_answer;
+            }
+          } catch (parseError) {
+            console.error("🔍 Error parsing map correct_answer:", parseError);
+            console.log("🔍 Raw correct_answer:", question.correct_answer);
+            mapData = [];
+          }
           
           console.log("🔍 Parsed Map Data:", mapData);
           
@@ -289,46 +472,46 @@ export const autoGradeSubmission = async (
           
           console.log("🔍 Map Boxes:", boxes);
           
-          boxes.forEach((box: any, boxIndex: number) => {
-            // Try different key formats that the test-taking component might use
-            const possibleKeys = [
-              `${question.id}_${box.id}`,  // Format used in test-taking
-              `${question.id}_box_${boxIndex}`,  // Current format
-              `${question.id}_label_${boxIndex}`,  // Alternative format
-            ];
-            
-            let userAnswer = null;
-            let usedKey = null;
-            
-            // Try each possible key format
-            for (const key of possibleKeys) {
-              if (userAnswers[key] !== undefined && userAnswers[key] !== null && userAnswers[key] !== "") {
-                userAnswer = userAnswers[key];
-                usedKey = key;
-                break;
-              }
-            }
-            
-            const correctAnswer = box.answer || box.label || "No answer set";
-            const isCorrect = answersMatch(userAnswer, correctAnswer);
+          // If userAnswer is an array from findStudentAnswer, use it
+          if (Array.isArray(userAnswer)) {
+            userAnswer.forEach((answerObj: any, index: number) => {
+              const box = boxes[index] || {};
+              const correctAnswer = box.answer || box.label || "No answer set";
+              const isCorrect = answersMatch(answerObj.answer, correctAnswer);
+              
+              listeningResults.push({
+                questionId: answerObj.key,
+                questionText: `Question ${questionCounter}: ${question.question_text} - Label ${index + 1}`,
+                questionType: "map_labeling",
+                userAnswer: answerObj.answer || "No answer provided",
+                correctAnswer: correctAnswer,
+                isCorrect,
+                points: isCorrect ? question.points || 1 : 0,
+                section: "listening" as const,
+                explanation: question.explanation,
+              });
+              questionCounter++;
+            });
+          } else {
+            // Fallback: treat as single question
+            const isCorrect = answersMatch(userAnswer, question.correct_answer);
             
             listeningResults.push({
-              questionId: usedKey || `${question.id}_${box.id}`,
-              questionText: `Question ${questionCounter}: ${question.question_text} - Label ${boxIndex + 1}`,
-              questionType: "map_labeling",
+              questionId: question.id,
+              questionText: `Question ${questionCounter}: ${question.question_text || 'Unknown'}`,
+              questionType: question.question_type || 'unknown',
               userAnswer: userAnswer !== undefined && userAnswer !== null ? userAnswer : "No answer provided",
-              correctAnswer: correctAnswer,
+              correctAnswer: question.correct_answer || "No correct answer set",
               isCorrect,
               points: isCorrect ? question.points || 1 : 0,
               section: "listening" as const,
               explanation: question.explanation,
             });
             questionCounter++;
-          });
+          }
         } catch (error) {
           console.error("🔍 Error parsing map data:", error);
           // Fallback: treat as single question
-          const userAnswer = userAnswers[question.id];
           const isCorrect = answersMatch(userAnswer, question.correct_answer);
           
           listeningResults.push({
@@ -345,63 +528,64 @@ export const autoGradeSubmission = async (
           questionCounter++;
         }
       } else if (question.question_type === "matching") {
-        // Matching questions: each pair is a separate question
+        // Matching questions: userAnswer is now an array from findStudentAnswer
         try {
           console.log("🔍 Processing Matching Question:", {
             questionId: question.id,
             correctAnswer: question.correct_answer,
-            options: question.options
+            options: question.options,
+            userAnswer: userAnswer
           });
           
-          const matchingData = typeof question.correct_answer === "string" 
-            ? JSON.parse(question.correct_answer) 
-            : question.correct_answer;
+          let matchingData;
+          try {
+            if (typeof question.correct_answer === "string") {
+              // Handle escaped JSON strings from the database
+              console.log("🔍 Raw correct_answer string:", question.correct_answer);
+              matchingData = JSON.parse(question.correct_answer);
+              console.log("🔍 Successfully parsed matchingData:", matchingData);
+              console.log("🔍 Type of matchingData:", typeof matchingData);
+              console.log("🔍 Is array:", Array.isArray(matchingData));
+            } else {
+              matchingData = question.correct_answer;
+            }
+          } catch (parseError) {
+            console.error("🔍 Error parsing matching correct_answer:", parseError);
+            console.log("🔍 Raw correct_answer:", question.correct_answer);
+            matchingData = [];
+          }
           
           console.log("🔍 Parsed Matching Data:", matchingData);
+          console.log("🔍 Original correct_answer:", question.correct_answer);
+          console.log("🔍 Correct answer type:", typeof question.correct_answer);
           
           // Handle the format where pairs are stored directly as an array
           const pairs = Array.isArray(matchingData) ? matchingData : [];
           
           console.log("🔍 Matching Pairs:", pairs);
+          console.log("🔍 Pairs length:", pairs.length);
           
+          // Process each pair and find the corresponding student answer
           pairs.forEach((pair: any, pairIndex: number) => {
-            // Try different key formats that the test-taking component might use
-            const possibleKeys = [
-              `${question.id}_${pairIndex}`,  // Format used in test-taking
-              `${question.id}_pair_${pairIndex}`,  // Current format
-              `${question.id}_left_${pairIndex}`,  // Alternative format
-            ];
+            // Try to find the student answer for this pair
+            const answerKeys = Object.keys(userAnswers).filter(key => key.startsWith('matching_'));
+            const studentAnswer = answerKeys[pairIndex] ? userAnswers[answerKeys[pairIndex]] : null;
+            const correctAnswer = pair.right || "No answer set";
+            const isCorrect = answersMatch(studentAnswer, correctAnswer);
             
-            let userAnswer = null;
-            let usedKey = null;
-            
-            // Try each possible key format
-            for (const key of possibleKeys) {
-              if (userAnswers[key] !== undefined && userAnswers[key] !== null && userAnswers[key] !== "") {
-                userAnswer = userAnswers[key];
-                usedKey = key;
-                break;
-              }
-            }
-            
-            const correctAnswer = pair.right || pair.answer || "No answer set";
-            const isCorrect = answersMatch(userAnswer, correctAnswer);
-            
-            console.log("🔍 Matching Pair Question:", {
-              usedKey,
+            console.log("🔍 Processing matching pair:", {
               pairIndex,
-              left: pair.left,
-              right: pair.right,
-              userAnswer,
+              pair,
+              studentAnswer,
               correctAnswer,
               isCorrect
             });
             
             listeningResults.push({
-              questionId: usedKey || `${question.id}_${pairIndex}`,
-              questionText: `Question ${questionCounter}: ${pair.left}`,
+              questionId: answerKeys[pairIndex] || `matching_${pairIndex}`,
+              questionText: `Question ${questionCounter}: ${pair.left || `Matching ${pairIndex + 1}`}`,
               questionType: "matching",
-              userAnswer: userAnswer !== undefined && userAnswer !== null ? userAnswer : "No answer provided",
+              userAnswer: studentAnswer || "No answer provided",
               correctAnswer: correctAnswer,
               isCorrect,
               points: isCorrect ? question.points || 1 : 0,
@@ -413,7 +597,6 @@ export const autoGradeSubmission = async (
         } catch (error) {
           console.error("🔍 Error parsing matching data:", error);
           // Fallback: treat as single question
-          const userAnswer = userAnswers[question.id];
           const isCorrect = answersMatch(userAnswer, question.correct_answer);
           
           listeningResults.push({
@@ -431,8 +614,53 @@ export const autoGradeSubmission = async (
         }
       } else {
         // Regular questions (short_answer, multiple_choice, etc.)
-        const userAnswer = userAnswers[question.id];
+        // userAnswer is already set by findStudentAnswer function above
         let correctAnswer = question.correct_answer;
+        
+        // Special handling for MCQ questions
+        if (question.question_type === "multiple_choice") {
+          console.log("🔍 Processing MCQ Question:", {
+            questionId: question.id,
+            correctAnswer: correctAnswer,
+            correctAnswerType: typeof correctAnswer,
+            options: question.options,
+            userAnswer: userAnswer
+          });
+          
+          // For MCQ questions, the correct_answer is stored as an index
+          // but the student answer is stored as the actual option text
+          // We need to convert the index to the actual option text for comparison
+          try {
+            let options = question.options;
+            if (typeof options === "string") {
+              options = JSON.parse(options);
+            }
+            
+            if (Array.isArray(options) && options.length > 0) {
+              const correctIndex = parseInt(correctAnswer);
+              if (!isNaN(correctIndex) && correctIndex >= 0 && correctIndex < options.length) {
+                correctAnswer = options[correctIndex];
+                console.log("🔍 Converted MCQ index to option text:", {
+                  originalIndex: correctAnswer,
+                  convertedAnswer: correctAnswer,
+                  options: options
+                });
+              } else {
+                console.warn("🔍 Invalid MCQ correct answer index:", {
+                  correctAnswer,
+                  optionsLength: options.length
+                });
+              }
+            } else {
+              console.warn("🔍 MCQ question has no valid options:", {
+                questionId: question.id,
+                options: question.options
+              });
+            }
+          } catch (error) {
+            console.error("🔍 Error processing MCQ options:", error);
+          }
+        }
         
         // Try to parse JSON for short answer questions that might have multiple answers
         if (question.question_type === "short_answer" && typeof correctAnswer === "string") {
@@ -453,6 +681,14 @@ export const autoGradeSubmission = async (
         }
         
         const isCorrect = answersMatch(userAnswer, correctAnswer);
+        
+        console.log("🔍 Question grading result:", {
+          questionId: question.id,
+          questionType: question.question_type,
+          userAnswer,
+          correctAnswer,
+          isCorrect
+        });
         
         listeningResults.push({
           questionId: question.id,
@@ -608,59 +844,92 @@ export const saveAutoGradedResults = async (
 // Debug function to test grading system
 export const debugGradingSystem = async (submissionId: string) => {
   try {
-    console.log("🔍 Debugging grading system for submission:", submissionId);
+    console.log("🔍 Starting debug grading system for submission:", submissionId);
     
-    // Get submission
+    // Get submission with answers
     const { data: submission, error: submissionError } = await supabase
       .from("test_submissions")
       .select("*")
       .eq("id", submissionId)
       .single();
 
-    if (submissionError) {
-      console.error("❌ Error fetching submission:", submissionError);
-      return;
-    }
+    if (submissionError) throw submissionError;
 
-    console.log("✅ Submission found:", {
-      id: submission.id,
-      testId: submission.test_id,
-      studentId: submission.student_id,
-      status: submission.status,
-      answersCount: Object.keys(submission.answers || {}).length
-    });
-
-    // Get listening questions directly from database
-    const { data: listeningQuestions, error: questionsError } = await supabase
-      .from("listening_questions")
-      .select("*")
-      .in("section_id", 
-        (await supabase
-          .from("listening_sections")
-          .select("id")
-          .eq("test_id", submission.test_id)).data?.map(s => s.id) || []
-      );
-
-    if (questionsError) {
-      console.error("❌ Error fetching listening questions:", questionsError);
-      return;
-    }
-
-    console.log("✅ Listening questions found:", listeningQuestions?.length || 0);
+    const userAnswers = submission.answers || {};
+    console.log("🔍 User answers:", userAnswers);
     
-    // Check each question's correct answer
-    listeningQuestions?.forEach((question, index) => {
-      console.log(`🔍 Question ${index + 1}:`, {
+    // Get test questions for all sections
+    const [readingData, listeningData, writingData] = await Promise.all([
+      supabase
+        .from("reading_sections")
+        .select("id, reading_questions (*)")
+        .eq("test_id", submission.test_id),
+      supabase
+        .from("listening_sections")
+        .select("id, listening_questions (*)")
+        .eq("test_id", submission.test_id),
+      supabase
+        .from("writing_sections")
+        .select("id, writing_questions (*)")
+        .eq("test_id", submission.test_id),
+    ]);
+
+    // Debug MCQ questions specifically
+    const allQuestions = [
+      ...(readingData.data?.flatMap((section: any) => section.reading_questions || []) || []),
+      ...(listeningData.data?.flatMap((section: any) => section.listening_questions || []) || []),
+      ...(writingData.data?.flatMap((section: any) => section.writing_questions || []) || [])
+    ];
+
+    const mcqQuestions = allQuestions.filter(q => q.question_type === "multiple_choice");
+    console.log("🔍 Found MCQ questions:", mcqQuestions.length);
+    
+    mcqQuestions.forEach((question, index) => {
+      console.log(`🔍 MCQ Question ${index + 1}:`, {
         id: question.id,
-        type: question.question_type,
         text: question.question_text,
         correctAnswer: question.correct_answer,
         correctAnswerType: typeof question.correct_answer,
-        options: question.options
+        options: question.options,
+        userAnswer: userAnswers[question.id],
+        userAnswerType: typeof userAnswers[question.id]
       });
+      
+      // Test the conversion logic
+      try {
+        let options = question.options;
+        if (typeof options === "string") {
+          options = JSON.parse(options);
+        }
+        
+        if (Array.isArray(options) && options.length > 0) {
+          const correctIndex = parseInt(question.correct_answer);
+          if (!isNaN(correctIndex) && correctIndex >= 0 && correctIndex < options.length) {
+            const convertedAnswer = options[correctIndex];
+            const userAnswer = userAnswers[question.id];
+            const isCorrect = answersMatch(userAnswer, convertedAnswer);
+            
+            console.log(`🔍 MCQ Question ${index + 1} grading:`, {
+              originalIndex: question.correct_answer,
+              convertedAnswer,
+              userAnswer,
+              isCorrect,
+              options
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`🔍 Error processing MCQ question ${index + 1}:`, error);
+      }
     });
 
+    // Run the actual grading
+    const result = await autoGradeSubmission(submissionId);
+    console.log("🔍 Grading result:", result);
+    
+    return result;
   } catch (error) {
-    console.error("❌ Debug error:", error);
+    console.error("🔍 Debug grading error:", error);
+    throw error;
   }
 };

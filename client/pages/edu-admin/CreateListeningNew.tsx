@@ -118,6 +118,15 @@ const CreateListeningNew: React.FC = () => {
       if (q.type === "multiple_choice") {
         options = q.content.options;
         correctAnswer = q.content.correctAnswer;
+        
+        console.log("🔍 Processing MCQ Question in handleEditorQuestionsChange:", {
+          questionId: q.id,
+          content: q.content,
+          correctAnswer: correctAnswer,
+          correctAnswerType: typeof correctAnswer,
+          options: options,
+          optionsType: typeof options
+        });
       } else if (q.type === "matching") {
         console.log("🔍 Processing Matching Question in handleEditorQuestionsChange:", {
           questionId: q.id,
@@ -968,7 +977,7 @@ const CreateListeningNew: React.FC = () => {
                     ? "map_labeling"
                     : "short_answer"; // default
 
-          return {
+          const questionData = {
             section_id: section.id,
             question_text: q.text,
             question_type: dbQuestionType,
@@ -978,6 +987,20 @@ const CreateListeningNew: React.FC = () => {
             correct_answer: q.correctAnswer,
             points: q.points || 1,
           };
+          
+          // Add specific logging for MCQ questions
+          if (q.type === "multiple_choice") {
+            console.log("🔍 Saving MCQ Question to Database:", {
+              questionNumber: index + 1,
+              questionText: q.text,
+              correctAnswer: q.correctAnswer,
+              correctAnswerType: typeof q.correctAnswer,
+              options: q.options,
+              finalQuestionData: questionData
+            });
+          }
+          
+          return questionData;
         });
         console.log('Questions to be saved:', questionsData);
 
@@ -1025,6 +1048,30 @@ const CreateListeningNew: React.FC = () => {
           }
 
           throw questionsError;
+        }
+        
+        // Verify what was actually saved to the database
+        console.log("🔍 Verifying saved MCQ questions in database...");
+        const { data: savedQuestions, error: fetchError } = await supabase
+          .from("listening_questions")
+          .select("*")
+          .eq("section_id", section.id)
+          .eq("question_type", "multiple_choice");
+          
+        if (fetchError) {
+          console.error("❌ Error fetching saved questions:", fetchError);
+        } else {
+          console.log("🔍 MCQ Questions saved to database:", savedQuestions);
+          savedQuestions?.forEach((question, index) => {
+            console.log(`🔍 Saved MCQ Question ${index + 1}:`, {
+              id: question.id,
+              questionText: question.question_text,
+              correctAnswer: question.correct_answer,
+              correctAnswerType: typeof question.correct_answer,
+              options: question.options,
+              optionsType: typeof question.options
+            });
+          });
         }
       }
 
@@ -1086,6 +1133,85 @@ const CreateListeningNew: React.FC = () => {
     }
   };
 
+  // Test MCQ question processing
+  const testMCQProcessing = () => {
+    console.log("🔍 Testing MCQ question processing...");
+    
+    // Simulate what the editor questions look like
+    const testEditorQuestions = [
+      {
+        id: "mcq_1",
+        type: "multiple_choice",
+        content: {
+          text: "What is the main reason for selling the furniture?",
+          options: ["Moving to a new house", "Need money urgently", "Furniture is too old", "Buying new furniture"],
+          correctAnswer: 1, // Index 1 = "Need money urgently"
+          correctIndex: 1
+        }
+      }
+    ];
+    
+    console.log("🔍 Test editor questions:", testEditorQuestions);
+    
+    // Process them like the real function does
+    const convertedQuestions = testEditorQuestions.map((q, index) => {
+      let options = null;
+      let correctAnswer = null;
+      
+      if (q.type === "multiple_choice") {
+        options = q.content.options;
+        correctAnswer = q.content.correctAnswer;
+        
+        console.log("🔍 Test MCQ Processing:", {
+          questionId: q.id,
+          content: q.content,
+          correctAnswer: correctAnswer,
+          correctAnswerType: typeof correctAnswer,
+          options: options,
+          optionsType: typeof options
+        });
+      }
+      
+      return {
+        id: q.id,
+        type: q.type,
+        text: q.content.text,
+        options,
+        correctAnswer,
+        points: 1,
+        position: index + 1,
+      };
+    });
+    
+    console.log("🔍 Converted test questions:", convertedQuestions);
+    
+    // Simulate database save
+    const questionsData = convertedQuestions.map((q, index) => {
+      const questionData = {
+        question_text: q.text,
+        question_type: "multiple_choice",
+        question_number: index + 1,
+        question_order: index + 1,
+        options: q.options ? JSON.stringify(q.options) : null,
+        correct_answer: q.correctAnswer,
+        points: q.points || 1,
+      };
+      
+      console.log("🔍 Test MCQ Database Save:", {
+        questionNumber: index + 1,
+        questionText: q.text,
+        correctAnswer: q.correctAnswer,
+        correctAnswerType: typeof q.correctAnswer,
+        options: q.options,
+        finalQuestionData: questionData
+      });
+      
+      return questionData;
+    });
+    
+    console.log("🔍 Final test questions data:", questionsData);
+  };
+
   // Show loading state
   if (isLoadingTest) {
     return (
@@ -1144,6 +1270,14 @@ const CreateListeningNew: React.FC = () => {
             className="text-purple-600 hover:text-purple-700"
           >
             🔄 Update QA
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={testMCQProcessing}
+            className="text-green-600 hover:text-green-700"
+          >
+            🧪 Test MCQ
           </Button>
         </div>
       </div>

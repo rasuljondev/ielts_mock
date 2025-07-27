@@ -112,33 +112,169 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
   }, [isOpen, submission]);
 
   const debugCorrectAnswers = async () => {
-    if (!submission) return;
-    
-    console.log("🔍 Debugging correct answers for submission:", submission.id);
-    
+    if (!submission) {
+      toast.error("No submission data available");
+      return;
+    }
+
     try {
-      // Get the grading result first
-      const result = await autoGradeSubmission(submission.id);
+      console.log("🔍 Debugging correct answers for submission:", submission.id);
       
-      // Check short answer questions specifically
-      const shortAnswerQuestions = result.detailedResults.filter(
-        r => r.questionType === "short_answer" && r.section === "listening"
-      );
+      // First, let's see what student answers are actually stored
+      console.log("🔍 Student answers from submission:", {
+        submissionId: submission.id,
+        answers: submission.answers,
+        answersType: typeof submission.answers,
+        answersKeys: submission.answers ? Object.keys(submission.answers) : [],
+        answersCount: submission.answers ? Object.keys(submission.answers).length : 0
+      });
       
-      console.log("🔍 Short Answer Questions Found:", shortAnswerQuestions.length);
+      // Get all questions for this test
+      const { data: listeningQuestions, error: questionsError } = await supabase
+        .from("listening_questions")
+        .select("*")
+        .in("section_id", 
+          (await supabase
+            .from("listening_sections")
+            .select("id")
+            .eq("test_id", submission.test_id)).data?.map(s => s.id) || []
+        );
+
+      if (questionsError) {
+        console.error("❌ Error fetching questions:", questionsError);
+        return;
+      }
+
+      // Filter for MCQ questions specifically
+      const mcqQuestions = listeningQuestions?.filter(q => q.question_type === "multiple_choice") || [];
+      console.log("🔍 Found MCQ questions:", mcqQuestions.length);
       
-      shortAnswerQuestions.forEach((question, index) => {
-        console.log(`🔍 Short Answer Question ${index + 1}:`, {
-          questionId: question.questionId,
-          questionText: question.questionText,
-          userAnswer: question.userAnswer,
-          correctAnswer: question.correctAnswer,
-          correctAnswerType: typeof question.correctAnswer,
-          isCorrect: question.isCorrect
+      mcqQuestions.forEach((question, index) => {
+        console.log(`🔍 MCQ Question ${index + 1}:`, {
+          id: question.id,
+          text: question.question_text,
+          correctAnswer: question.correct_answer,
+          correctAnswerType: typeof question.correct_answer,
+          options: question.options,
+          userAnswer: submission.answers?.[question.id],
+          userAnswerType: typeof submission.answers?.[question.id]
+        });
+        
+        // Test the conversion logic
+        try {
+          let options = question.options;
+          if (typeof options === "string") {
+            options = JSON.parse(options);
+          }
+          
+          if (Array.isArray(options) && options.length > 0) {
+            const correctIndex = parseInt(question.correct_answer);
+            if (!isNaN(correctIndex) && correctIndex >= 0 && correctIndex < options.length) {
+              const convertedAnswer = options[correctIndex];
+              const userAnswer = submission.answers?.[question.id];
+              console.log(`🔍 MCQ Question ${index + 1} conversion:`, {
+                originalIndex: question.correct_answer,
+                convertedAnswer,
+                userAnswer,
+                options
+              });
+            }
+          }
+        } catch (error) {
+          console.error(`🔍 Error processing MCQ question ${index + 1}:`, error);
+        }
+      });
+      
+      // Also check all question types to see what answers are stored
+      console.log("🔍 All questions and their answers:");
+      listeningQuestions?.forEach((question, index) => {
+        const userAnswer = submission.answers?.[question.id];
+        console.log(`🔍 Question ${index + 1} (${question.question_type}):`, {
+          id: question.id,
+          type: question.question_type,
+          text: question.question_text,
+          userAnswer,
+          userAnswerType: typeof userAnswer,
+          hasAnswer: userAnswer !== undefined && userAnswer !== null && userAnswer !== ""
         });
       });
       
-      toast.success(`Found ${shortAnswerQuestions.length} short answer questions. Check console for details.`);
+      toast.success(`Found ${mcqQuestions.length} MCQ questions. Check console for details.`);
+      
+    } catch (error) {
+      console.error("❌ Debug error:", error);
+      toast.error("Debug failed. Check console for details.");
+    }
+  };
+
+  // Comprehensive debug function to understand the answer mapping issue
+  const debugAnswerMapping = async () => {
+    if (!submission) {
+      toast.error("No submission data available");
+      return;
+    }
+
+    try {
+      console.log("🔍 === COMPREHENSIVE ANSWER MAPPING DEBUG ===");
+      console.log("🔍 Submission ID:", submission.id);
+      console.log("🔍 Student answers from submission:", submission.answers);
+      
+      // Get all questions for this test
+      const { data: listeningQuestions, error: questionsError } = await supabase
+        .from("listening_questions")
+        .select("*")
+        .in("section_id", 
+          (await supabase
+            .from("listening_sections")
+            .select("id")
+            .eq("test_id", submission.test_id)).data?.map(s => s.id) || []
+        );
+
+      if (questionsError) {
+        console.error("❌ Error fetching questions:", questionsError);
+        return;
+      }
+
+      console.log("🔍 All listening questions from database:", listeningQuestions);
+      
+      // Check each question against student answers
+      console.log("🔍 === ANSWER MAPPING ANALYSIS ===");
+      listeningQuestions?.forEach((question, index) => {
+        const userAnswer = submission.answers?.[question.id];
+        console.log(`🔍 Question ${index + 1}:`, {
+          questionId: question.id,
+          questionType: question.question_type,
+          questionText: question.question_text,
+          userAnswer,
+          userAnswerType: typeof userAnswer,
+          hasAnswer: userAnswer !== undefined && userAnswer !== null && userAnswer !== "",
+          // Check if this question ID exists in student answers
+          existsInStudentAnswers: question.id in (submission.answers || {}),
+          // Show all keys in student answers for comparison
+          allStudentAnswerKeys: Object.keys(submission.answers || {})
+        });
+      });
+      
+      // Check if there are any student answer keys that don't match question IDs
+      const studentAnswerKeys = Object.keys(submission.answers || {});
+      const questionIds = listeningQuestions?.map(q => q.id) || [];
+      
+      console.log("🔍 === KEY COMPARISON ===");
+      console.log("🔍 Student answer keys:", studentAnswerKeys);
+      console.log("🔍 Question IDs from database:", questionIds);
+      
+      const unmatchedKeys = studentAnswerKeys.filter(key => !questionIds.includes(key));
+      const unmatchedQuestionIds = questionIds.filter(id => !studentAnswerKeys.includes(id));
+      
+      console.log("🔍 Unmatched student answer keys (answers without questions):", unmatchedKeys);
+      console.log("🔍 Unmatched question IDs (questions without answers):", unmatchedQuestionIds);
+      
+      // Show what's in the unmatched keys
+      unmatchedKeys.forEach(key => {
+        console.log(`🔍 Unmatched key "${key}" has value:`, submission.answers?.[key]);
+      });
+      
+      toast.success(`Debug complete. Check console for detailed analysis.`);
       
     } catch (error) {
       console.error("❌ Debug error:", error);
@@ -158,7 +294,8 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
       testId: submission.test_id,
       studentId: submission.student_id,
       status: submission.status,
-      hasAnswers: !!submission.answers
+      hasAnswers: !!submission.answers,
+      answersFromModal: submission.answers
     });
 
     setLoading(true);
@@ -181,6 +318,12 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
       }
 
       console.log("✅ Submission found in database:", submissionCheck);
+      console.log("🔍 Comparing submission data:", {
+        modalAnswers: submission.answers,
+        databaseAnswers: submissionCheck.answers,
+        modalAnswersKeys: submission.answers ? Object.keys(submission.answers) : [],
+        databaseAnswersKeys: submissionCheck.answers ? Object.keys(submissionCheck.answers) : []
+      });
 
       const result = await autoGradeSubmission(submission.id);
       setGradingResult(result);
@@ -573,7 +716,16 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
               className="text-xs"
             >
               <Bug className="h-4 w-4 mr-1" />
-              Debug Correct Answers
+              Debug MCQ Questions
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => debugAnswerMapping()}
+              className="text-xs"
+            >
+              <Bug className="h-4 w-4 mr-1" />
+              Debug Answer Mapping
             </Button>
           </div>
         </DialogHeader>
