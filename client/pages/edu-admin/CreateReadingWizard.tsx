@@ -94,7 +94,6 @@ const CreateReadingWizard: React.FC = () => {
   const [passageData, setPassageData] = useState({
     title: `Reading Passage ${passageNumber || "1"}`,
     instructions: "Read the passage and answer the questions that follow.",
-    duration_minutes: 20,
     passage_text: "",
   });
 
@@ -256,7 +255,6 @@ const CreateReadingWizard: React.FC = () => {
           passage_text: passageData.passage_text,
           passage_number: parseInt(passageNumber || "1"),
           instructions: passageData.instructions,
-          duration_minutes: passageData.duration_minutes,
           section_order: parseInt(passageNumber || "1"),
         })
         .select()
@@ -559,22 +557,7 @@ const CreateReadingWizard: React.FC = () => {
                   />
                 </div>
 
-                <div>
-                  <Label htmlFor="duration">Duration (minutes)</Label>
-                  <Input
-                    id="duration"
-                    type="number"
-                    min="1"
-                    max="60"
-                    value={passageData.duration_minutes}
-                    onChange={(e) =>
-                      setPassageData((prev) => ({
-                        ...prev,
-                        duration_minutes: parseInt(e.target.value) || 20,
-                      }))
-                    }
-                  />
-                </div>
+
               </div>
 
               <div className="flex justify-end">
@@ -905,10 +888,6 @@ const CreateReadingWizard: React.FC = () => {
                   <CardContent className="space-y-2">
                     <div>
                       <strong>Title:</strong> {passageData.title}
-                    </div>
-                    <div>
-                      <strong>Duration:</strong> {passageData.duration_minutes}{" "}
-                      minutes
                     </div>
                     <div>
                       <strong>Instructions:</strong> {passageData.instructions}
