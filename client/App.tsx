@@ -51,10 +51,7 @@ import Admins from "./pages/super-admin/Admins";
 import CreateTestNew from "./pages/edu-admin/CreateTestNew";
 import CreateTestAdvanced from "./pages/edu-admin/CreateTestAdvanced";
 import CreateIELTSTest from "./pages/edu-admin/CreateIELTSTest";
-import CreateReadingSection from "./pages/edu-admin/CreateReadingSection";
-
 import CreateReadingNew from "./pages/edu-admin/CreateReadingNew";
-import CreateReadingWizard from "./pages/edu-admin/CreateReadingWizard";
 
 import CreateListeningNew from "./pages/edu-admin/CreateListeningNew";
 
@@ -412,14 +409,6 @@ function AppRoutes() {
             }
           />
           <Route
-            path="/edu-admin/tests/create/reading"
-            element={
-              <ProtectedRoute allowedRoles={["edu_admin"]}>
-                <CreateReadingSection />
-              </ProtectedRoute>
-            }
-          />
-          <Route
             path="/edu-admin/tests/create/reading/:testId"
             element={
               <ProtectedRoute allowedRoles={["edu_admin"]}>
@@ -432,14 +421,6 @@ function AppRoutes() {
             element={
               <ProtectedRoute allowedRoles={["edu_admin"]}>
                 <CreateReadingNew />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/edu-admin/tests/create/reading-wizard/:testId/:passageNumber"
-            element={
-              <ProtectedRoute allowedRoles={["edu_admin"]}>
-                <CreateReadingWizard />
               </ProtectedRoute>
             }
           />

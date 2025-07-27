@@ -24,12 +24,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
-import { testSupabaseConnection, testSupabaseAuth } from "@/lib/supabaseTest";
-import {
-  logExtensionInfo,
-  checkForExtensionError,
-  getExtensionWarnings,
-} from "@/lib/extensionDetection";
+
 import { MediaUploader, MediaFile } from "@/components/ui/media-uploader";
 import { UnifiedTestEditor } from "@/components/test-creation/UnifiedTestEditor";
 import { toast } from "sonner";
@@ -236,47 +231,14 @@ const CreateListeningNew: React.FC = () => {
   };
 
   // Utility function to update existing questions with correct answers
-  const updateExistingQuestions = async () => {
-    try {
-      console.log("🔧 Updating existing questions with correct answers...");
-      
-      // This is a helper function to update questions that have empty correct answers
-      // You can call this from the browser console or add a button for it
-      
-      const { data: questions, error } = await supabase
-        .from("listening_questions")
-        .select("*")
-        .eq("correct_answer", '""')
-        .eq("question_type", "short_answer");
-      
-      if (error) {
-        console.error("❌ Error fetching questions:", error);
-        return;
-      }
-      
-      console.log(`🔧 Found ${questions?.length || 0} questions with empty correct answers`);
-      
-      // For each question, you would need to manually set the correct answer
-      questions?.forEach((question, index) => {
-        console.log(`🔧 Question ${index + 1}:`, {
-          id: question.id,
-          text: question.question_text,
-          currentAnswer: question.correct_answer
-        });
-      });
-      
-      toast.success(`Found ${questions?.length || 0} questions that need correct answers`);
-      
-    } catch (error) {
-      console.error("❌ Error updating questions:", error);
-      toast.error("Failed to update questions");
-    }
-  };
+
 
   // Quick connectivity test
+  // Removed demo connectivity test function
   const quickConnectivityTest = async (): Promise<
     boolean | "extension_interference"
   > => {
+    return true; // Simplified - always return true
     try {
       console.log("🔍 Quick connectivity test...");
       const controller = new AbortController();
@@ -324,17 +286,7 @@ const CreateListeningNew: React.FC = () => {
     }
   };
 
-  // Check for browser extensions on mount
-  useEffect(() => {
-    // Log extension info for debugging
-    logExtensionInfo();
 
-    // Show warning if problematic extensions detected
-    const warnings = getExtensionWarnings();
-    if (warnings.length > 0) {
-      console.warn("⚠️ Potential extension interference:", warnings.join("\n"));
-    }
-  }, []);
 
   // When loading draft or test data, parse content as JSON if it's a string
   useEffect(() => {
@@ -381,9 +333,8 @@ const CreateListeningNew: React.FC = () => {
       console.log("Loading test with ID:", testId, "Type:", typeof testId);
       setIsLoadingTest(true);
 
-      // Quick connectivity test first
-      const connectivityResult = await quickConnectivityTest();
-      if (connectivityResult === "extension_interference") {
+
+      if (false) { // Removed demo mode logic
         // Extension interference detected - enable demo mode
         console.warn(
           "🔌 Extension interference detected, enabling demo mode...",
@@ -413,7 +364,7 @@ const CreateListeningNew: React.FC = () => {
 
         setIsLoadingTest(false);
         return; // Continue in demo mode
-      } else if (!connectivityResult) {
+      } else if (false) { // Removed demo mode logic
         // Check if we can operate in demo mode
         const isDemoUrl = import.meta.env.VITE_SUPABASE_URL?.includes(
           "demo.supabase.co",
@@ -612,9 +563,9 @@ const CreateListeningNew: React.FC = () => {
         let errorDetails = [];
 
         // Check for browser extension interference first
-        if (checkForExtensionError(error)) {
+        if (false) { // Removed demo function
           errorMessage = "�� Browser Extension Interference Detected!";
-          const warnings = getExtensionWarnings();
+          const warnings = []; // Removed demo function
           errorDetails = [
             "A browser extension is blocking network requests.",
             "",
@@ -824,64 +775,9 @@ const CreateListeningNew: React.FC = () => {
   };
 
   // Test Supabase connection
-  const testConnection = async () => {
-    setMessage({ type: "info", content: "Testing Supabase connection..." });
 
-    const connectionTest = await testSupabaseConnection();
-    const authTest = await testSupabaseAuth();
 
-    console.log("Connection test result:", connectionTest);
-    console.log("Auth test result:", authTest);
 
-    const message = [
-      `📡 ${connectionTest.message}`,
-      `🔐 ${authTest.message}`,
-      connectionTest.details
-        ? `📊 Details: ${JSON.stringify(connectionTest.details, null, 2)}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-
-    setMessage({
-      type: connectionTest.success && authTest.success ? "success" : "error",
-      content: message,
-    });
-  };
-
-  // Demo save function (when extensions block database access)
-  const saveSectionDemo = async () => {
-    setIsSaving(true);
-    setMessage({ type: "", content: "" });
-
-    try {
-      // Simulate saving delay
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      setMessage({
-        type: "success",
-        content:
-          "✅ Demo Mode: Section saved locally!\n\n" +
-          "📝 Your work is saved in browser storage.\n" +
-          "🔌 To save to database, resolve browser extension conflicts.\n\n" +
-          "💡 Data will persist until you clear browser storage.",
-      });
-
-      console.log("Demo save completed:", {
-        sectionTitle,
-        sectionInstructions,
-        editorQuestions: editorQuestions.length,
-        mediaFiles: mediaFiles.length,
-      });
-    } catch (error) {
-      setMessage({
-        type: "error",
-        content: "Failed to save in demo mode.",
-      });
-    } finally {
-      setIsSaving(false);
-    }
-  };
 
   // Save section
   const saveSection = async () => {
@@ -1134,83 +1030,7 @@ const CreateListeningNew: React.FC = () => {
   };
 
   // Test MCQ question processing
-  const testMCQProcessing = () => {
-    console.log("🔍 Testing MCQ question processing...");
-    
-    // Simulate what the editor questions look like
-    const testEditorQuestions = [
-      {
-        id: "mcq_1",
-        type: "multiple_choice",
-        content: {
-          text: "What is the main reason for selling the furniture?",
-          options: ["Moving to a new house", "Need money urgently", "Furniture is too old", "Buying new furniture"],
-          correctAnswer: 1, // Index 1 = "Need money urgently"
-          correctIndex: 1
-        }
-      }
-    ];
-    
-    console.log("🔍 Test editor questions:", testEditorQuestions);
-    
-    // Process them like the real function does
-    const convertedQuestions = testEditorQuestions.map((q, index) => {
-      let options = null;
-      let correctAnswer = null;
-      
-      if (q.type === "multiple_choice") {
-        options = q.content.options;
-        correctAnswer = q.content.correctAnswer;
-        
-        console.log("🔍 Test MCQ Processing:", {
-          questionId: q.id,
-          content: q.content,
-          correctAnswer: correctAnswer,
-          correctAnswerType: typeof correctAnswer,
-          options: options,
-          optionsType: typeof options
-        });
-      }
-      
-      return {
-        id: q.id,
-        type: q.type,
-        text: q.content.text,
-        options,
-        correctAnswer,
-        points: 1,
-        position: index + 1,
-      };
-    });
-    
-    console.log("🔍 Converted test questions:", convertedQuestions);
-    
-    // Simulate database save
-    const questionsData = convertedQuestions.map((q, index) => {
-      const questionData = {
-        question_text: q.text,
-        question_type: "multiple_choice",
-        question_number: index + 1,
-        question_order: index + 1,
-        options: q.options ? JSON.stringify(q.options) : null,
-        correct_answer: q.correctAnswer,
-        points: q.points || 1,
-      };
-      
-      console.log("🔍 Test MCQ Database Save:", {
-        questionNumber: index + 1,
-        questionText: q.text,
-        correctAnswer: q.correctAnswer,
-        correctAnswerType: typeof q.correctAnswer,
-        options: q.options,
-        finalQuestionData: questionData
-      });
-      
-      return questionData;
-    });
-    
-    console.log("🔍 Final test questions data:", questionsData);
-  };
+
 
   // Show loading state
   if (isLoadingTest) {
@@ -1253,33 +1073,7 @@ const CreateListeningNew: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* REMOVE: Auto-saved indicator at the top */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={testConnection}
-            className="text-blue-600 hover:text-blue-700"
-          >
-            🔧 Test DB
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={updateExistingQuestions}
-            className="text-purple-600 hover:text-purple-700"
-          >
-            🔄 Update QA
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={testMCQProcessing}
-            className="text-green-600 hover:text-green-700"
-          >
-            🧪 Test MCQ
-          </Button>
-        </div>
+
       </div>
 
       {/* Messages */}
@@ -1457,20 +1251,12 @@ const CreateListeningNew: React.FC = () => {
             Cancel
           </Button>
           <Button
-            onClick={
-              currentTest?.title?.includes("Demo Test")
-                ? saveSectionDemo
-                : saveSection
-            }
+            onClick={saveSection}
             disabled={isSaving}
             className="bg-green-600 hover:bg-green-700"
           >
             <Save className="h-4 w-4 mr-2" />
-            {isSaving
-              ? "Saving..."
-              : currentTest?.title?.includes("Demo Test")
-                ? "Save (Demo)"
-                : "Save Section"}
+            {isSaving ? "Saving..." : "Save Section"}
           </Button>
         </div>
       </div>

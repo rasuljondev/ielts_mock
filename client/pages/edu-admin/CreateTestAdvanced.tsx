@@ -59,6 +59,7 @@ const CreateTestAdvanced: React.FC = () => {
   });
   const [isCreating, setIsCreating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const [message, setMessage] = useState({ type: "", content: "" });
 
   const {
@@ -145,12 +146,19 @@ const CreateTestAdvanced: React.FC = () => {
         minimum_sections: data.type === "full" ? 3 : 1,
       });
 
-      setCurrentTest(testData);
       setMessage({
         type: "success",
         content:
-          "Test created successfully! Now add sections to complete your test.",
+          "Test created successfully! Redirecting to test creation page...",
       });
+      
+      // Set redirecting state to prevent showing the edit mode
+      setIsRedirecting(true);
+      
+      // Navigate to the test creation page with the test ID
+      setTimeout(() => {
+        navigate(`/edu-admin/tests/create/advanced/${testData.id}`);
+      }, 1500);
     } catch (error: any) {
       console.error("Error creating test:", error?.message || error);
       setMessage({
@@ -224,6 +232,20 @@ const CreateTestAdvanced: React.FC = () => {
     if (!currentTest) return false;
     return checkSectionRequirements();
   };
+
+  if (isRedirecting) {
+    return (
+      <div className="p-6 max-w-4xl mx-auto">
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <h2 className="text-xl font-semibold mb-2">Test Created Successfully!</h2>
+            <p className="text-gray-600">Redirecting to test creation page...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!currentTest) {
     return (
@@ -532,7 +554,7 @@ const CreateTestAdvanced: React.FC = () => {
                 <Button
                   onClick={() =>
                     navigate(
-                      `/edu-admin/tests/create/reading-wizard/${currentTest.id}/1`,
+                      `/edu-admin/tests/create/reading/${currentTest.id}/1`,
                     )
                   }
                 >

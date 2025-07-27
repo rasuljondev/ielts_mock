@@ -483,7 +483,7 @@ const CreateIELTSTest: React.FC = () => {
                   <Button
                     onClick={() =>
                       navigate(
-                        `/edu-admin/tests/create/reading-wizard/${testId}/${index + 1}`,
+                        `/edu-admin/tests/create/reading/${testId}/${index + 1}`,
                       )
                     }
                   >
