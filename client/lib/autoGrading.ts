@@ -327,15 +327,51 @@ export const autoGradeSubmission = async (
         .eq("test_id", submission.test_id),
     ]);
 
+    // Debug: Log reading sections being loaded
+    console.log("🔍 Reading sections loaded from database:", {
+      totalSections: readingData.data?.length || 0,
+      sections: readingData.data?.map((section: any) => ({
+        id: section.id,
+        questionsCount: section.reading_questions?.length || 0,
+        questions: section.reading_questions?.map((q: any) => ({
+          id: q.id,
+          question_number: q.question_number,
+          question_type: q.question_type
+        })) || []
+      })) || []
+    });
+
     // Process reading questions
     const readingQuestions =
       readingData.data?.flatMap(
         (section: any) => section.reading_questions || [],
       ) || [];
 
+    // Debug: Log all reading questions being processed
+    console.log("🔍 Reading questions loaded from database:", {
+      totalQuestions: readingQuestions.length,
+      questions: readingQuestions.map((q: any) => ({
+        id: q.id,
+        question_number: q.question_number,
+        question_type: q.question_type,
+        question_text: q.question_text?.substring(0, 50) + "...",
+        section_id: q.reading_section_id
+      }))
+    });
+
     const readingResults: QuestionResult[] = [];
     
     readingQuestions.forEach((question: any) => {
+      // Debug: Log each question being processed
+      console.log("🔍 Processing question:", {
+        id: question.id,
+        question_number: question.question_number,
+        question_type: question.question_type,
+        question_text: question.question_text?.substring(0, 50) + "...",
+        hasCorrectAnswer: !!question.correct_answer,
+        correctAnswerType: typeof question.correct_answer
+      });
+
       // Use the same helper function for reading questions
       const userAnswer = findStudentAnswer(question, userAnswers);
       
@@ -518,6 +554,21 @@ export const autoGradeSubmission = async (
           explanation: question.explanation,
         });
       }
+    });
+
+    // Debug: Log any questions that might have been skipped
+    console.log("🔍 Questions processed vs loaded:", {
+      loadedCount: readingQuestions.length,
+      processedCount: readingResults.length,
+      skippedCount: readingQuestions.length - readingResults.length,
+      skippedQuestions: readingQuestions.filter((q: any) => 
+        !readingResults.some((r: any) => r.questionId === q.id)
+      ).map((q: any) => ({
+        id: q.id,
+        question_number: q.question_number,
+        question_type: q.question_type,
+        question_text: q.question_text?.substring(0, 50) + "..."
+      }))
     });
 
     // Process listening questions
@@ -757,6 +808,21 @@ export const autoGradeSubmission = async (
       readingTotal > 0
         ? getBandScore(readingCorrect, readingTotal, "reading")
         : 0;
+
+    // Debug: Log final reading results
+    console.log("🔍 Final reading results:", {
+      totalQuestions: readingTotal,
+      correctAnswers: readingCorrect,
+      percentage: readingPercentage,
+      results: readingResults.map((r: any) => ({
+        questionId: r.questionId,
+        questionText: r.questionText?.substring(0, 50) + "...",
+        questionType: r.questionType,
+        isCorrect: r.isCorrect,
+        userAnswer: r.userAnswer,
+        correctAnswer: r.correctAnswer
+      }))
+    });
 
     const listeningCorrect = listeningResults.filter((r) => r.isCorrect).length;
     const listeningTotal = listeningResults.length;

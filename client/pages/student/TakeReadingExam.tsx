@@ -267,7 +267,18 @@ const TakeReadingExam: React.FC = () => {
 
       // Transform data into passages
       const passageData: ReadingPassage[] = readingSections.map((section) => {
-
+        // Debug: Log each section being processed
+        console.log("🔍 Processing section:", {
+          passage_number: section.passage_number,
+          title: section.title,
+          questions_count: section.reading_questions?.length || 0,
+          questions: section.reading_questions?.map((q: any) => ({
+            id: q.id,
+            type: q.question_type,
+            question_number: q.question_number,
+            question_text: q.question_text?.substring(0, 30) + "..."
+          })) || []
+        });
 
         return {
           number: section.passage_number,
@@ -466,6 +477,18 @@ const TakeReadingExam: React.FC = () => {
     const currentPassageData = passages.find((p) => p.number === currentPassage);
     const questions = currentPassageData?.questions || [];
 
+    // Debug: Log what questions are being returned
+    console.log("🔍 getCurrentPassageQuestions for passage:", currentPassage, {
+      foundPassage: !!currentPassageData,
+      questionsCount: questions.length,
+      questions: questions.map(q => ({
+        id: q.id,
+        type: q.type,
+        question_number: q.question_number,
+        section_number: q.section_number
+      }))
+    });
+
     return questions;
   };
 
@@ -487,6 +510,17 @@ const TakeReadingExam: React.FC = () => {
 
   const switchPassage = (passageNumber: number) => {
     const passage = passages.find((p) => p.number === passageNumber);
+    console.log("🔍 Switching to passage:", passageNumber, {
+      foundPassage: !!passage,
+      questionsCount: passage?.questions?.length || 0,
+      questions: passage?.questions?.map(q => ({
+        id: q.id,
+        type: q.type,
+        question_number: q.question_number,
+        question_text: q.question_text?.substring(0, 30) + "..."
+      })) || []
+    });
+    
     if (passage && passage.questions.length > 0) {
       setCurrentPassage(passageNumber);
       setCurrentQuestionIndex(0);
@@ -664,21 +698,201 @@ const TakeReadingExam: React.FC = () => {
       return renderPassageWithEmbeddedQuestions(content);
     }
 
-    // If content is an object (TipTap format), extract text and embed questions
+    // If content is an object (TipTap format), render it directly
     if (typeof content === "object" && content !== null) {
-      try {
-        const result = parseContentForStudent(content);
-        if (result && result.content) {
-          // Extract text content and embed questions
-          const textContent = extractTextFromTipTap(result.content);
-          return renderPassageWithEmbeddedQuestions(textContent);
-        }
-      } catch (error) {
-        console.error("Error parsing TipTap content:", error);
-      }
+      return renderTipTapContent(content);
     }
 
     return <p>No content available</p>;
+  };
+
+  // Function to render TipTap content with embedded questions
+  const renderTipTapContent = (content: any) => {
+    if (!content || !content.content) return null;
+
+    return (
+      <div className="space-y-4">
+        {content.content.map((node: any, index: number) => renderNode(node, index))}
+      </div>
+    );
+  };
+
+  // Function to render individual TipTap nodes
+  const renderNode = (node: any, index: number): React.ReactNode => {
+    if (!node) return null;
+
+    switch (node.type) {
+      case "doc":
+        return (
+          <div key={index} className="space-y-4">
+            {node.content?.map((child: any, childIndex: number) =>
+              renderNode(child, childIndex)
+            )}
+          </div>
+        );
+
+      case "paragraph":
+        return (
+          <div key={index} className="mb-4 text-lg leading-relaxed">
+            {node.content?.map((child: any, childIndex: number) =>
+              renderNode(child, childIndex)
+            )}
+          </div>
+        );
+
+      case "text":
+        return <span key={index}>{node.text}</span>;
+
+      case "bold":
+        return (
+          <strong key={index} className="font-bold">
+            {node.content?.map((child: any, childIndex: number) =>
+              renderNode(child, childIndex)
+            )}
+          </strong>
+        );
+
+      case "italic":
+        return (
+          <em key={index} className="italic">
+            {node.content?.map((child: any, childIndex: number) =>
+              renderNode(child, childIndex)
+            )}
+          </em>
+        );
+
+      case "hardBreak":
+        return <br key={index} />;
+
+      case "heading":
+        const level = node.attrs?.level || 1;
+        const HeadingTag = `h${level}` as keyof JSX.IntrinsicElements;
+        return (
+          <HeadingTag key={index} className="mb-4 font-bold">
+            {node.content?.map((child: any, childIndex: number) =>
+              renderNode(child, childIndex)
+            )}
+          </HeadingTag>
+        );
+
+      case "bulletList":
+        return (
+          <ul key={index} className="list-disc list-inside mb-4 space-y-2">
+            {node.content?.map((child: any, childIndex: number) =>
+              renderNode(child, childIndex)
+            )}
+          </ul>
+        );
+
+      case "orderedList":
+        return (
+          <ol key={index} className="list-decimal list-inside mb-4 space-y-2">
+            {node.content?.map((child: any, childIndex: number) =>
+              renderNode(child, childIndex)
+            )}
+          </ol>
+        );
+
+      case "listItem":
+        return (
+          <li key={index} className="text-lg">
+            {node.content?.map((child: any, childIndex: number) =>
+              renderNode(child, childIndex)
+            )}
+          </li>
+        );
+
+      // Custom TipTap nodes for questions
+      case "short_answer":
+        return (
+          <input
+            key={index}
+            type="text"
+            value={answers[node.attrs?.id] || ""}
+            onChange={(e) => updateAnswer(node.attrs?.id, e.target.value)}
+            placeholder={node.attrs?.placeholder || `Answer ${node.attrs?.question_number}`}
+            className="inline-block w-20 h-7 border border-gray-300 rounded bg-white text-center text-sm font-medium shadow-sm focus:outline-none focus:border-blue-500 focus:shadow-md mx-1"
+          />
+        );
+
+      case "mcq":
+        const options = node.attrs?.options || [];
+        return (
+          <div key={index} className="mb-4">
+            <p className="font-medium mb-2">
+              {node.attrs?.question_number}. {node.attrs?.question_text}
+            </p>
+            <div className="space-y-1">
+              {options.map((option: string, optionIndex: number) => (
+                <label key={optionIndex} className="flex items-center cursor-pointer">
+                  <input
+                    type="radio"
+                    name={`mcq_${node.attrs?.id}`}
+                    value={option}
+                    checked={answers[node.attrs?.id] === option}
+                    onChange={(e) => updateAnswer(node.attrs?.id, e.target.value)}
+                    className="mr-2"
+                  />
+                  <span>{option}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+
+      case "matching":
+        const leftItems = node.attrs?.left || [];
+        const rightItems = node.attrs?.right || [];
+        
+        return (
+          <div key={index} className="mb-4">
+            <div className="mb-3 text-sm text-gray-600">
+              Match each item with the correct answer.
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <h4 className="font-medium text-gray-700 mb-3">Items:</h4>
+                {leftItems.map((item: string, itemIndex: number) => (
+                  <div key={itemIndex} className="mb-2 p-2 bg-gray-50 rounded">
+                    {node.attrs?.question_number + itemIndex}. {item}
+                  </div>
+                ))}
+              </div>
+              <div>
+                <h4 className="font-medium text-gray-700 mb-3">Your answers:</h4>
+                {leftItems.map((_: any, itemIndex: number) => (
+                  <select
+                    key={itemIndex}
+                    value={answers[`${node.attrs?.id}_${itemIndex}`] || ""}
+                    onChange={(e) => updateAnswer(`${node.attrs?.id}_${itemIndex}`, e.target.value)}
+                    className="w-full mb-2 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select answer</option>
+                    {rightItems.map((option: string, optIndex: number) => (
+                      <option key={optIndex} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
+      default:
+        // For any other node types, try to render their content
+        if (node.content) {
+          return (
+            <div key={index}>
+              {node.content.map((child: any, childIndex: number) =>
+                renderNode(child, childIndex)
+              )}
+            </div>
+          );
+        }
+        return null;
+    }
   };
 
   // Function to render passage text with embedded questions
@@ -776,13 +990,13 @@ const TakeReadingExam: React.FC = () => {
     const questionNumber = question.question_number || key + 1;
 
     return (
-      <div key={key} className="my-4">
+      <div key={question.id} className="my-4">
         <div className="mb-2 font-medium">
           {questionNumber}. {questionText}
         </div>
         <div className="space-y-1">
           {options.map((option: string, optIndex: number) => (
-            <label key={optIndex} className="flex items-center cursor-pointer">
+            <label key={`${question.id}-${optIndex}`} className="flex items-center cursor-pointer">
               <input
                 type="radio"
                 name={`question_${question.id}`}
@@ -820,31 +1034,38 @@ const TakeReadingExam: React.FC = () => {
     }
 
     return (
-      <div key={key} className="my-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            {leftItems.map((item: string, itemIndex: number) => (
-              <div key={itemIndex} className="mb-2 p-2 bg-gray-50 rounded">
-                {question.question_number}. {item}
-              </div>
-            ))}
+      <div key={question.id} className="my-4">
+        <div className="space-y-4">
+          <div className="text-sm text-gray-600 mb-3">
+            Match each item with the correct answer.
           </div>
-          <div>
-            {leftItems.map((_: any, itemIndex: number) => (
-              <select
-                key={itemIndex}
-                value={answers[`${question.id}_${itemIndex}`] || ""}
-                onChange={(e) => updateAnswer(`${question.id}_${itemIndex}`, e.target.value)}
-                className="w-full mb-2 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">Select answer</option>
-                {rightItems.map((option: string, optIndex: number) => (
-                  <option key={optIndex} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            ))}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <h4 className="font-medium text-gray-700 mb-3">Items:</h4>
+              {leftItems.map((item: string, itemIndex: number) => (
+                <div key={`${question.id}-item-${itemIndex}`} className="mb-2 p-2 bg-gray-50 rounded">
+                  {question.question_number + itemIndex}. {item}
+                </div>
+              ))}
+            </div>
+            <div>
+              <h4 className="font-medium text-gray-700 mb-3">Your answers:</h4>
+              {leftItems.map((_: any, itemIndex: number) => (
+                <select
+                  key={`${question.id}-select-${itemIndex}`}
+                  value={answers[`${question.id}_${itemIndex}`] || ""}
+                  onChange={(e) => updateAnswer(`${question.id}_${itemIndex}`, e.target.value)}
+                  className="w-full mb-2 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select answer</option>
+                  {rightItems.map((option: string, optIndex: number) => (
+                    <option key={`${question.id}-option-${optIndex}`} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -943,59 +1164,102 @@ const TakeReadingExam: React.FC = () => {
     );
   };
 
-  // Function to generate content with embedded questions from database questions
-  const generateContentWithEmbeddedQuestions = (questions: Question[]): string => {
-    if (!questions || questions.length === 0) return "";
-    
-    let content = "";
-    
-    // Group questions by type and create content
-    const mcqQuestions = questions.filter(q => q.type === "multiple_choice");
-    const shortAnswerQuestions = questions.filter(q => q.type === "short_answer");
-    const matchingQuestions = questions.filter(q => q.type === "matching");
-    
-    // Add MCQ questions
-    if (mcqQuestions.length > 0) {
-      content += "Choose TRUE if the statement agrees with the information given in the text, choose FALSE if the statement contradicts the information, or choose NOT GIVEN if there is no information on this.\n\n";
+  // Function to render content from database (like listening test)
+  const renderContent = (content: any) => {
+    console.log("🔍 renderContent called with:", {
+      contentType: typeof content,
+      contentLength: content?.length || 0,
+      hasQuestions: currentPassageData?.questions?.length || 0,
+      content: content,
+    });
+
+    // Safety check - ensure content is not null/undefined
+    if (!content) {
+      console.warn("⚠️ Content is null or undefined");
+      return (
+        <div className="text-center py-8">
+          <p className="text-gray-500 mb-4">
+            No content available for this test.
+          </p>
+        </div>
+      );
+    }
+
+    // Priority 1: If we have HTML content, render it with embedded input fields
+    if (
+      content &&
+      typeof content === "string" &&
+      content.includes &&
+      content.includes("<") &&
+      content.includes(">")
+    ) {
+      console.log("Rendering HTML content with embedded questions");
+      return renderContentWithEmbeddedQuestions(content);
+    }
+
+    // Priority 2: If we have plain text content, render it
+    if (
+      content &&
+      typeof content === "string" &&
+      content.trim() !== "" &&
+      !content.startsWith("{")
+    ) {
+      console.log("Rendering plain text content");
+      return renderContentWithEmbeddedQuestions(content);
+    }
+
+    // Priority 3: If no content but we have questions, try to reconstruct from context
+    if (
+      !content ||
+      content === "" ||
+      content === "No content available"
+    ) {
+      return (
+        <div className="text-center py-8">
+          <p className="text-gray-500 mb-4">
+            No content available for this test.
+          </p>
+        </div>
+      );
+    }
+
+    // Check if content is plain text or JSON
+    if (typeof content === "string" && content.includes && !content.startsWith("{")) {
+      // Plain text or HTML content - parse and embed questions inline
+      console.log("Rendering as plain text/HTML content");
+      return renderContentWithEmbeddedQuestions(content);
+    }
+
+    // JSON content - use the parser
+    try {
+      console.log("Attempting to parse JSON content");
+      const result = parseContentForStudent(content);
+      console.log("Parsed result:", result);
       
-      mcqQuestions.forEach((question, index) => {
-        content += `${question.question_number}. ${question.question_text}\n`;
-        if (question.options && Array.isArray(question.options)) {
-          question.options.forEach((option: string, optIndex: number) => {
-            content += `${String.fromCharCode(65 + optIndex)}) ${option}\n`;
-          });
-        }
-        content += "\n";
-      });
+      if (!result || !result.content || !result.content.content) {
+        console.warn("⚠️ Invalid parsed result structure");
+        return (
+          <div className="text-center py-8">
+            <p className="text-gray-500 mb-4">
+              Unable to parse test content.
+            </p>
+          </div>
+        );
+      }
+      
+      return (
+        <div className="space-y-6">
+          {result.content.content.map((node: any, index: number) => {
+            console.log(`Rendering node ${index}:`, node);
+            return <div key={index}>{renderNode(node, index)}</div>;
+          })}
+        </div>
+      );
+    } catch (error) {
+      console.error("Error parsing content:", error);
+      // If parsing fails, treat as plain text
+      return renderContentWithEmbeddedQuestions(content);
     }
-    
-    // Add short answer questions
-    if (shortAnswerQuestions.length > 0) {
-      content += "Complete the notes. Write ONE WORD ONLY from the text for each answer.\n\n";
-      content += "Marie Curie's research on radioactivity\n\n";
-      content += "When uranium was discovered to be radioactive, Marie Curie found that the element called [2] had the same property.\n\n";
-    }
-    
-    // Add matching questions
-    if (matchingQuestions.length > 0) {
-      matchingQuestions.forEach((question, index) => {
-        if (question.options) {
-          try {
-            const options = typeof question.options === 'string' ? JSON.parse(question.options) : question.options;
-            if (options.left && options.right) {
-              options.left.forEach((item: string, itemIndex: number) => {
-                content += `${question.question_number}. ${item}\n`;
-              });
-            }
-          } catch (e) {
-            console.error("Error parsing matching options:", e);
-          }
-        }
-        content += "\n";
-      });
-    }
-    
-    return content;
   };
 
   if (loading) {
@@ -1036,7 +1300,32 @@ const TakeReadingExam: React.FC = () => {
 
   const passageQuestions = getCurrentPassageQuestions();
   const currentQuestion = getCurrentQuestion();
-  const totalQuestions = allQuestions.length;
+  
+  // Calculate total questions from all passages
+  const totalQuestions = (() => {
+    let total = 0;
+    passages.forEach(passage => {
+      passage.questions.forEach(question => {
+        if (question.type === "matching") {
+          // For matching questions, count each pair as one question
+          try {
+            const options = typeof question.options === 'string' ? JSON.parse(question.options) : question.options;
+            if (options && options.left && Array.isArray(options.left)) {
+              total += options.left.length;
+            } else {
+              total += 1; // Fallback
+            }
+          } catch (e) {
+            total += 1; // Fallback
+          }
+        } else {
+          // For other question types, count as 1
+          total += 1;
+        }
+      });
+    });
+    return total;
+  })();
   
   // Calculate answered questions properly, handling matching questions
   const answeredQuestions = (() => {
@@ -1072,6 +1361,23 @@ const TakeReadingExam: React.FC = () => {
     return answeredQuestionIds.size;
   })();
 
+  // Debug: Log the question counts
+  console.log("🔍 Question Counts:", {
+    totalQuestions,
+    answeredQuestions,
+    allQuestionsLength: allQuestions.length,
+    passagesCount: passages.length,
+    passageDetails: passages.map(p => ({
+      passage: p.number,
+      questionsCount: p.questions.length,
+      questions: p.questions.map(q => ({
+        id: q.id,
+        type: q.type,
+        question_number: q.question_number
+      }))
+    }))
+  });
+
   return (
     <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
       {/* Exam Header - Fixed */}
@@ -1099,16 +1405,6 @@ const TakeReadingExam: React.FC = () => {
 
             {/* Right: Timer and Controls */}
             <div className="flex items-center space-x-2 sm:space-x-4">
-              {/* Progress */}
-              <div className="text-center">
-                <div className="text-xs font-medium text-gray-700">
-                  Questions Answered
-                </div>
-                <div className="text-base font-bold">
-                  {answeredQuestions} / {totalQuestions}
-                </div>
-              </div>
-
               {/* Timer */}
               <div className="text-center bg-gray-50 rounded-lg px-2 py-1 border">
                 <div className="text-xs font-medium text-gray-700">
@@ -1141,12 +1437,7 @@ const TakeReadingExam: React.FC = () => {
                   <AlertDialogHeader>
                     <AlertDialogTitle>Submit Your Test</AlertDialogTitle>
                     <AlertDialogDescription>
-                      Are you sure you want to submit your test? You have
-                      answered{" "}
-                      <strong>
-                        {answeredQuestions} out of {totalQuestions}
-                      </strong>{" "}
-                      questions. This action cannot be undone.
+                      Are you sure you want to submit your test? This action cannot be undone.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
@@ -1172,16 +1463,11 @@ const TakeReadingExam: React.FC = () => {
         <div className="w-1/2 bg-white border-r-2 border-gray-300 overflow-hidden">
           <div className="h-full flex flex-col">
             {/* Passage Header */}
-            <div className="bg-blue-50 border-b border-blue-200 px-6 py-4 flex-shrink-0">
+            <div className="bg-blue-50 border-b border-blue-200 px-6 py-2 flex-shrink-0">
               <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-blue-900">
-                    {currentPassageData?.title || `Passage ${currentPassage}`}
-                  </h2>
-                  <p className="text-sm text-blue-700">
-                    {passageQuestions.length} questions
-                  </p>
-                </div>
+                <h2 className="text-lg font-bold text-blue-900">
+                  {currentPassageData?.title || `Passage ${currentPassage}`}
+                </h2>
                 <Badge
                   variant="outline"
                   className="text-blue-700 border-blue-300"
@@ -1215,30 +1501,26 @@ const TakeReadingExam: React.FC = () => {
         <div className="w-1/2 bg-gray-50 overflow-hidden">
           <div className="h-full flex flex-col">
             {/* Questions Header */}
-            <div className="bg-blue-50 border-b border-blue-200 px-6 py-4 flex-shrink-0">
+            <div className="bg-blue-50 border-b border-blue-200 px-6 py-2 flex-shrink-0">
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-bold text-blue-900">
                     Questions for Passage {currentPassage}
                   </h2>
-                  <p className="text-sm text-blue-700">
-                    {passageQuestions.length} questions • {answeredQuestions} answered
-                  </p>
                 </div>
-                <Badge
-                  variant="outline"
-                  className="text-blue-700 border-blue-300"
-                >
-                  {Math.round((answeredQuestions / totalQuestions) * 100)}% Complete
-                </Badge>
               </div>
             </div>
 
             {/* Questions Content */}
             <ScrollArea className="flex-1 p-6">
               <div className="prose prose-lg max-w-none leading-relaxed">
-                {passageQuestions.length > 0 ? (
-                  renderContentWithEmbeddedQuestions(generateContentWithEmbeddedQuestions(passageQuestions))
+                {currentPassageData?.content ? (
+                  renderContent(currentPassageData.content)
+                ) : passageQuestions.length > 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>Questions available but no content to display them with.</p>
+                  </div>
                 ) : (
                   <div className="text-center py-12 text-gray-500">
                     <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />

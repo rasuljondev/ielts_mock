@@ -1,10 +1,6 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { Table } from "@tiptap/extension-table";
-import { TableRow } from "@tiptap/extension-table-row";
-import { TableHeader } from "@tiptap/extension-table-header";
-import { TableCell } from "@tiptap/extension-table-cell";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { uploadFile } from "@/lib/uploadUtils";
 import { Button } from "@/components/ui/button";
@@ -23,19 +19,14 @@ import {
   Type,
   List,
   MousePointer,
-  Map,
-  Table as TableIcon,
   Bold,
   Italic,
   Plus,
   X,
   Trash2,
-  Grid3X3,
 } from "lucide-react";
-import { MapDiagramNode } from "./IELTSListeningEditor";
 import { ShortAnswerNode } from './ShortAnswerNode';
 import { MatchingNode } from './MatchingNode';
-import { MapLabelNode } from './MapLabelNode';
 import { MCQNode } from './MCQNode';
 
 interface Question {
@@ -43,9 +34,7 @@ interface Question {
   type:
     | "short_answer"
     | "multiple_choice"
-    | "matching"
-    | "map_diagram"
-    | "table";
+    | "matching";
   content: any;
   summary: string;
 }
@@ -85,7 +74,6 @@ export function ReadingTestEditor(
   const [currentQuestionType, setCurrentQuestionType] = useState<string | null>(
     null,
   );
-  const [showTablePicker, setShowTablePicker] = useState(false);
   // Remove local editorKey, use parent key for reset
 
   // Question form states
@@ -94,9 +82,6 @@ export function ReadingTestEditor(
   const [mcqOptions, setMcqOptions] = useState(["", "", "", ""]);
   const [correctOption, setCorrectOption] = useState(0);
   const [matchingPairs, setMatchingPairs] = useState([{ left: "", right: "" }]);
-  const [mapImageFiles, setMapImageFiles] = useState<MediaFile[]>([]);
-  const [mapAnswers, setMapAnswers] = useState<string[]>([""]);
-  const [mapBoxes, setMapBoxes] = useState<{ id: number; x: number; y: number; label: string; answer: string }[]>([]);
   // Add TFNG state
   const [tfngQuestion, setTfngQuestion] = useState("");
   const [tfngCorrectOption, setTfngCorrectOption] = useState(0);
@@ -106,19 +91,11 @@ export function ReadingTestEditor(
   const editor = useEditor({
     extensions: [
       StarterKit,
-      Table.configure({
-        resizable: true,
-      }),
-      TableRow,
-      TableHeader,
-      TableCell,
       Placeholder.configure({
         placeholder: placeholder || "Start typing your question content...",
       }),
-      MapDiagramNode, // <-- Add this line
       ShortAnswerNode,
       MatchingNode,
-      MapLabelNode,
       MCQNode,
     ],
     content: content ?? initialContent ?? "",
@@ -130,111 +107,75 @@ export function ReadingTestEditor(
     },
     onUpdate: ({ editor }) => {
       if (onContentChange) {
-        const editorContent = editor.getJSON();
-        const questions = extractQuestionsFromContent(editorContent);
-        console.log("🔍 ReadingTestEditor onUpdate - Content being sent to parent:", {
-          contentLength: JSON.stringify(editorContent).length,
-          hasShortAnswerNodes: JSON.stringify(editorContent).includes('"type":"short_answer"'),
-          hasMatchingNodes: JSON.stringify(editorContent).includes('"type":"matching"'),
-          hasMCQNodes: JSON.stringify(editorContent).includes('"type":"mcq"'),
-          nodeTypes: editorContent?.content?.map((n: any) => n.type) || [],
-          extractedQuestions: questions.length
-        });
-        onContentChange(editorContent);
-        if (onEditorQuestionsChange) {
-          onEditorQuestionsChange(questions);
-        }
+        onContentChange(editor.getJSON());
       }
     },
   });
 
-  // Helper function to extract questions from TipTap content
+  // When content prop changes (e.g., after clear all), update the editor
+  useEffect(() => {
+    if (editor && content !== undefined) {
+      // Handle both string and object content
+      if (typeof content === 'string') {
+        // If it's a string, try to parse it as JSON first
+        try {
+          const parsedContent = JSON.parse(content);
+          if (JSON.stringify(parsedContent) !== JSON.stringify(editor.getJSON())) {
+            editor.commands.setContent(parsedContent);
+          }
+        } catch {
+          // If it's not valid JSON, treat it as plain text
+          if (content !== editor.getHTML()) {
+            editor.commands.setContent(content);
+          }
+        }
+      } else if (typeof content === 'object' && content !== null) {
+        // If it's an object, set it directly
+        if (JSON.stringify(content) !== JSON.stringify(editor.getJSON())) {
+          editor.commands.setContent(content);
+        }
+      }
+    }
+  }, [content, editor]);
+
   const extractQuestionsFromContent = (content: any): any[] => {
     const questions: any[] = [];
 
     const traverse = (node: any) => {
-      if (
-        node.type &&
-        [
-          "mcq",
-          "short_answer",
-          "map_diagram",
-          "matching",
-        ].includes(node.type)
-      ) {
-        // Convert TipTap node to database-compatible question format
-        const dbTypeMap: { [key: string]: string } = {
-          "mcq": "multiple_choice",
-          "short_answer": "short_answer",
-          "matching": "matching",
-          "map_diagram": "map_diagram"
-        };
-
-        const dbType = dbTypeMap[node.type] || "short_answer";
-
-        let question: any = {
-          id: `${dbType}_${node.attrs?.question_number || questions.length + 1}`,
-          type: dbType,
-          text: node.attrs?.question_text || node.attrs?.text || "",
-          points: 1,
-          position: node.attrs?.question_number || questions.length + 1,
-        };
-
-        if (node.type === "mcq") {
-          question.options = node.attrs?.options || [];
-          question.correctAnswer = node.attrs?.correctIndex || 0;
-        } else if (node.type === "short_answer") {
-          question.correctAnswer = node.attrs?.answers || [""];
-        } else if (node.type === "matching") {
-          question.correctAnswer = {
-            left: node.attrs?.left || [],
-            right: node.attrs?.right || [],
-          };
-        } else if (node.type === "map_diagram") {
-          question.correctAnswer = node.attrs?.boxes || [];
-          question.imageUrl = node.attrs?.imageUrl || "";
-          question.questionCount = node.attrs?.questionCount || 1;
-        }
-
-        questions.push(question);
-      }
-
-      if (node.content) {
+      if (node.type === "short_answer") {
+        questions.push({
+          id: node.attrs?.id || `short_answer_${Date.now()}`,
+          type: "short_answer",
+          content: node,
+          summary: node.attrs?.summary || "Short answer question",
+        });
+      } else if (node.type === "matching") {
+        questions.push({
+          id: node.attrs?.id || `matching_${Date.now()}`,
+          type: "matching",
+          content: node,
+          summary: node.attrs?.summary || "Matching question",
+        });
+      } else if (node.type === "mcq") {
+        questions.push({
+          id: node.attrs?.id || `mcq_${Date.now()}`,
+          type: "multiple_choice",
+          content: node,
+          summary: node.attrs?.summary || "Multiple choice question",
+        });
+      } else if (node.content) {
         node.content.forEach(traverse);
       }
     };
 
-    if (content && content.content) {
+    if (content?.content) {
       content.content.forEach(traverse);
     }
 
     return questions;
   };
 
-  // Only update editor content on initial load or when explicitly cleared
-  useEffect(() => {
-    console.log("🔍 Content sync useEffect:", {
-      hasEditor: !!editor,
-      contentType: typeof content,
-      editorContentLength: editor?.getJSON()?.content?.length || 0,
-      shouldUpdate: editor && content !== undefined && !editor.getJSON().content?.length
-    });
-    
-    if (editor && content !== undefined && !editor.getJSON().content?.length) {
-      // Only set content if editor is empty and we have initial content
-      console.log("🔍 Setting editor content from parent:", content);
-      if (typeof content === 'string') {
-        try {
-          const parsedContent = JSON.parse(content);
-          editor.commands.setContent(parsedContent);
-        } catch {
-          editor.commands.setContent(content);
-        }
-      } else if (typeof content === 'object' && content !== null) {
-        editor.commands.setContent(content);
-      }
-    }
-  }, [content, editor]);
+
 
   // Keep local questions in sync with parent
   useEffect(() => {
@@ -256,9 +197,12 @@ export function ReadingTestEditor(
   }, [content]);
 
   const openQuestionModal = (type: string) => {
-    setCurrentQuestionType(type);
-    setShowModal(true);
-    resetForms();
+    // Only allow supported question types
+    if (["short_answer", "multiple_choice", "matching", "tfng"].includes(type)) {
+      setCurrentQuestionType(type);
+      setShowModal(true);
+      resetForms();
+    }
   };
 
   const resetForms = () => {
@@ -267,14 +211,13 @@ export function ReadingTestEditor(
     setMcqOptions(["", "", "", ""]);
     setCorrectOption(0);
     setMatchingPairs([{ left: "", right: "" }]);
-    setMapImageFiles([]);
-    setMapAnswers([""]);
-    setMapBoxes([]);
     // Reset TFNG state
     setTfngQuestion("");
     setTfngCorrectOption(0);
     setOptionError(""); // Clear error on reset
   };
+
+
 
   // Calculate the next question number based on existing questions
   const getNextQuestionNumber = () => {
@@ -282,19 +225,22 @@ export function ReadingTestEditor(
     
     let maxNumber = startingQuestionNumber - 1; // Start from the base number
     questions.forEach(question => {
+      // Add null checks to prevent errors
+      const questionContent = question?.content || {};
+      
       if (question.type === "matching") {
         // For matching, count each pair as a separate question
-        const pairCount = question.content.left?.length || 0;
-        const startNumber = question.content.question_number || 0;
+        const pairCount = questionContent.left?.length || 0;
+        const startNumber = questionContent.question_number || 0;
         maxNumber = Math.max(maxNumber, startNumber + pairCount - 1);
-      } else if (question.type === "map_diagram") {
-        // For map/diagram, count each label as a separate question
-        const labelCount = question.content.boxes?.length || 0;
-        const startNumber = question.content.question_number || 0;
-        maxNumber = Math.max(maxNumber, startNumber + labelCount - 1);
+      } else if (question.type === "short_answer") {
+        // For short answer, count each answer as a separate question
+        const answerCount = questionContent.answers?.length || 0;
+        const startNumber = questionContent.question_number || 0;
+        maxNumber = Math.max(maxNumber, startNumber + answerCount - 1);
       } else {
         // For other types, just use the question number
-        maxNumber = Math.max(maxNumber, question.content.question_number || 0);
+        maxNumber = Math.max(maxNumber, questionContent.question_number || 0);
       }
     });
     
@@ -337,15 +283,7 @@ export function ReadingTestEditor(
     }
   };
 
-  const addMapAnswer = () => {
-    setMapAnswers([...mapAnswers, ""]);
-  };
 
-  const removeMapAnswer = (index: number) => {
-    if (mapAnswers.length > 1) {
-      setMapAnswers(mapAnswers.filter((_, i) => i !== index));
-    }
-  };
 
   const insertShortAnswer = (answer: string, questionNumber?: number) => {
     if (!editor) return;
@@ -431,18 +369,6 @@ export function ReadingTestEditor(
           }).run();
           
           console.log("🔍 Short answer node inserted. New editor content:", editor?.getJSON());
-          
-          // Force content update to parent
-          setTimeout(() => {
-            if (onContentChange) {
-              const updatedContent = editor.getJSON();
-              console.log("🔍 Force updating parent with content:", {
-                nodeTypes: updatedContent?.content?.map((n: any) => n.type) || [],
-                hasShortAnswerNodes: JSON.stringify(updatedContent).includes('"type":"short_answer"')
-              });
-              onContentChange(updatedContent);
-            }
-          }, 100);
         });
         // Add all new questions to the questions array
         const newQuestions = answers.map((answer, index) => ({
@@ -505,18 +431,6 @@ export function ReadingTestEditor(
             correct_index: correctOption,
           },
         }).run();
-        
-        // Force content update to parent
-        setTimeout(() => {
-          if (onContentChange) {
-            const updatedContent = editor.getJSON();
-            console.log("🔍 Force updating parent with MCQ content:", {
-              nodeTypes: updatedContent?.content?.map((n: any) => n.type) || [],
-              hasMCQNodes: JSON.stringify(updatedContent).includes('"type":"mcq"')
-            });
-            onContentChange(updatedContent);
-          }
-        }, 100);
         // Add to questions array
         const newQuestion = {
           id,
@@ -579,18 +493,6 @@ export function ReadingTestEditor(
         
         console.log("🔍 Matching node inserted. New editor content:", editor?.getJSON());
         
-        // Force content update to parent
-        setTimeout(() => {
-          if (onContentChange) {
-            const updatedContent = editor.getJSON();
-            console.log("🔍 Force updating parent with matching content:", {
-              nodeTypes: updatedContent?.content?.map((n: any) => n.type) || [],
-              hasMatchingNodes: JSON.stringify(updatedContent).includes('"type":"matching"')
-            });
-            onContentChange(updatedContent);
-          }
-        }, 100);
-        
         // Add single question to questions array
         const newQuestion = {
           id,
@@ -600,7 +502,7 @@ export function ReadingTestEditor(
             right,
             question_number: nextQuestionNumber,
           },
-          summary: `Matching ${nextQuestionNumber}: ${validPairs.map(pair => `${pair.left} - ${pair.right}`).join(', ')}`,
+          summary: `Matching ${nextQuestionNumber}-${nextQuestionNumber + validPairs.length - 1}: ${validPairs.map(pair => `${pair.left} - ${pair.right}`).join(', ')}`,
         } as Question;
         
         console.log("🔍 Matching Question Array:", newQuestion);
@@ -609,57 +511,7 @@ export function ReadingTestEditor(
         setQuestions(updatedQuestions);
         if (onQuestionsChange) onQuestionsChange(updatedQuestions);
         if (onEditorQuestionsChange) onEditorQuestionsChange(updatedQuestions);
-        setQuestionCounter((prev) => prev + left.length);
-        setShowModal(false);
-        setCurrentQuestionType(null);
-        resetForms();
-        return;
-      }
-      case "map_diagram": {
-        if (mapImageFiles.length === 0) return;
-        
-        // Create one question containing all labels
-        const id = `map_${Date.now()}`;
-        const nextQuestionNumber = getNextQuestionNumber();
-        
-        console.log("🔍 Map Diagram Debug:", {
-          imageFiles: mapImageFiles,
-          boxes: mapBoxes,
-          questionNumber: nextQuestionNumber
-        });
-        
-        // Insert single custom node with all boxes and one image
-        editor.chain().focus().insertContent({
-          type: 'map_labeling',
-          attrs: {
-            id,
-            question_number: nextQuestionNumber,
-            imageUrl: mapImageFiles[0].url,
-            boxes: mapBoxes,
-          },
-                  }).run();
-        
-        console.log("🔍 MCQ node inserted. New editor content:", editor?.getJSON());
-        
-        // Add single question to questions array
-        const newQuestion = {
-          id,
-          type: "map_diagram" as const,
-          content: {
-            imageUrl: mapImageFiles[0].url,
-            boxes: mapBoxes,
-            question_number: nextQuestionNumber,
-          },
-          summary: `Map ${nextQuestionNumber}: ${mapBoxes.map(box => box.answer || 'No answer').join(', ')}`,
-        } as Question;
-        
-        console.log("🔍 Map Diagram Question Array:", newQuestion);
-        
-        const updatedQuestions = [...questions, newQuestion];
-        setQuestions(updatedQuestions);
-        if (onQuestionsChange) onQuestionsChange(updatedQuestions);
-        if (onEditorQuestionsChange) onEditorQuestionsChange(updatedQuestions);
-        setQuestionCounter((prev) => prev + mapBoxes.length);
+        setQuestionCounter((prev) => prev + validPairs.length);
         setShowModal(false);
         setCurrentQuestionType(null);
         resetForms();
@@ -764,66 +616,28 @@ export function ReadingTestEditor(
       onContentChange(editor.getJSON());
     }
 
-    // Recalculate question counter
-    let totalQuestions = 1;
+    // Recalculate question counter based on starting question number
+    let totalQuestions = startingQuestionNumber - 1;
     updatedQuestions.forEach((q) => {
       if (q.type === "matching") {
-        totalQuestions += q.content.left?.length || 1;
+        // For matching, count each pair as a separate question
+        const pairCount = q.content.left?.length || 0;
+        const startNumber = q.content.question_number || 0;
+        totalQuestions = Math.max(totalQuestions, startNumber + pairCount - 1);
       } else if (q.type === "short_answer") {
-        totalQuestions += q.content.answers?.length || 1;
+        // For short answer, count each answer as a separate question
+        const answerCount = q.content.answers?.length || 0;
+        const startNumber = q.content.question_number || 0;
+        totalQuestions = Math.max(totalQuestions, startNumber + answerCount - 1);
       } else {
-        totalQuestions += 1;
+        // For other types, just use the question number
+        totalQuestions = Math.max(totalQuestions, q.content.question_number || 0);
       }
     });
-    setQuestionCounter(totalQuestions);
+    setQuestionCounter(totalQuestions + 1);
   };
 
-  const insertTable = (rows: number, cols: number) => {
-    if (!editor) return;
 
-    editor
-      .chain()
-      .focus()
-      .insertTable({ rows, cols, withHeaderRow: false })
-      .run();
-    setShowTablePicker(false);
-  };
-
-  const TablePicker = () => {
-    const [hoveredCell, setHoveredCell] = useState({ row: 0, col: 0 });
-
-    return (
-      <div className="absolute top-full left-0 mt-2 bg-white border rounded-lg shadow-lg p-3 z-50 min-w-[180px] min-h-[120px] w-auto" style={{ width: 'max-content' }}>
-        <div className="text-sm font-medium mb-2">Insert Table</div>
-        <div className="grid grid-cols-8 gap-1">
-          {Array.from({ length: 64 }, (_, i) => {
-            const row = Math.floor(i / 8);
-            const col = i % 8;
-            const isHovered = row <= hoveredCell.row && col <= hoveredCell.col;
-
-            return (
-              <div
-                key={i}
-                className={`border cursor-pointer ${
-                  isHovered
-                    ? "bg-blue-200 border-blue-400"
-                    : "bg-gray-50 border-gray-300"
-                }`}
-                style={{ width: "28px", height: "28px", aspectRatio: "1" }}
-                onMouseEnter={() => setHoveredCell({ row, col })}
-                onClick={() =>
-                  insertTable(hoveredCell.row + 1, hoveredCell.col + 1)
-                }
-              />
-            );
-          })}
-        </div>
-        <div className="text-xs text-gray-500 mt-2">
-          {hoveredCell.row + 1} × {hoveredCell.col + 1}
-        </div>
-      </div>
-    );
-  };
 
   // --- Add MCQ and Matching Insertion Buttons ---
   // Add to the toolbar:
@@ -855,21 +669,7 @@ export function ReadingTestEditor(
               {/* Toolbar */}
               <div className="border-b p-4">
                 <div className="flex flex-wrap gap-2">
-                  {/* Question Type Buttons - Reordered with Table first */}
-
-                  {/* Table Button - Moved to first position */}
-                  <div className="relative">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowTablePicker(!showTablePicker)}
-                      className="flex items-center gap-2"
-                    >
-                      <TableIcon className="h-4 w-4" />
-                      Table
-                    </Button>
-                    {showTablePicker && <TablePicker />}
-                  </div>
+                  {/* Question Type Buttons */}
 
                   <Button
                     variant="outline"
@@ -910,15 +710,7 @@ export function ReadingTestEditor(
                     TFNG
                   </Button>
 
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => openQuestionModal("map_diagram")}
-                    className="flex items-center gap-2"
-                  >
-                    <Map className="h-4 w-4" />
-                    Map/Diagram
-                  </Button>
+                  {/* Map/Diagram button removed */}
 
                   <div className="border-l border-gray-300 mx-2" />
 
@@ -979,24 +771,23 @@ export function ReadingTestEditor(
                         let displayNumber = "";
                         let questionsInThisItem = 1;
 
+                        // Add null checks to prevent errors
+                        const questionContent = question?.content || {};
+                        const questionNumber = questionContent?.question_number || currentQuestionNumber;
+
                         if (question.type === "matching") {
-                          questionsInThisItem = question.content.left?.length || 1;
+                          questionsInThisItem = questionContent.left?.length || 1;
                           displayNumber = questionsInThisItem === 1 
-                            ? `Q${question.content.question_number}` 
-                            : `Q${question.content.question_number}-${question.content.question_number + questionsInThisItem - 1}`;
+                            ? `Q${questionNumber}` 
+                            : `Q${questionNumber}-${questionNumber + questionsInThisItem - 1}`;
                         } else if (question.type === "short_answer") {
                           questionsInThisItem = 1; // Each short answer is now individual
-                          displayNumber = `Q${question.content.question_number || currentQuestionNumber}`;
-                        } else if (question.type === "map_diagram") {
-                          questionsInThisItem = question.content.boxes?.length || 1;
-                          displayNumber = questionsInThisItem === 1 
-                            ? `Q${question.content.question_number}` 
-                            : `Q${question.content.question_number}-${question.content.question_number + questionsInThisItem - 1}`;
+                          displayNumber = `Q${questionNumber}`;
                         } else if (question.type === "multiple_choice") {
                           questionsInThisItem = 1; // Multiple choice is a single question
-                          displayNumber = `Q${question.content.question_number || currentQuestionNumber}`;
+                          displayNumber = `Q${questionNumber}`;
                         } else {
-                          displayNumber = `Q${question.content.question_number || currentQuestionNumber}`;
+                          displayNumber = `Q${questionNumber}`;
                         }
 
                         const element = (
@@ -1009,18 +800,17 @@ export function ReadingTestEditor(
                                 {displayNumber}: {question.summary}
                               </div>
                               <div className="text-xs text-gray-600 truncate">
-                                {question.content.question ||
-                                  question.content.text ||
-                                  question.content.prompt ||
+                                {questionContent.question ||
+                                  questionContent.text ||
+                                  questionContent.prompt ||
                                   (question.type === "matching"
-                                    ? `${question.content.left?.length || 0} pairs: ${question.content.left?.map((left: string, idx: number) => `${left} - ${question.content.right?.[idx] || ''}`).join(', ')}`
+                                    ? `${questionContent.left?.length || 0} pairs: ${questionContent.left?.map((left: string, idx: number) => `${left} - ${questionContent.right?.[idx] || ''}`).join(', ')}`
                                     : question.type === "multiple_choice"
-                                      ? question.content.question_text ||
+                                      ? questionContent.question_text ||
                                         "Multiple choice question"
                                       : question.type === 'short_answer'
-                                        ? `Answer: ${question.content.answer || 'No answer'}`
-                                        : question.type === 'map_diagram'
-                                          ? `Map label: ${question.content.boxes?.map((box: any) => box.answer || 'No answer').join(', ') || 'No answers'}`
+                                        ? `Answer: ${questionContent.answer || 'No answer'}`
+
                                           : "Question")}
                               </div>
                             </div>
@@ -1069,9 +859,7 @@ export function ReadingTestEditor(
                   ? "Multiple Choice"
                   : currentQuestionType === "matching"
                     ? "Matching"
-                    : currentQuestionType === "map_diagram"
-                      ? "Map/Diagram"
-                      : ""}{" "}
+                                      : ""}{" "}
               Question
             </DialogTitle>
           </DialogHeader>
@@ -1203,135 +991,7 @@ export function ReadingTestEditor(
               </div>
             )}
 
-            {/* Map/Diagram */}
-            {currentQuestionType === "map_diagram" && (
-              <div className="space-y-4">
-                <div>
-                  <Label>Upload Image</Label>
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          try {
-                            const uploadedUrl = await uploadFile(file, "image");
-                            setMapImageFiles([
-                              {
-                                id: Date.now().toString(),
-                                url: uploadedUrl,
-                                name: file.name,
-                                type: "image",
-                                size: file.size,
-                                file: file,
-                                uploaded: true,
-                              },
-                            ]);
-                          } catch (error) {
-                            console.error("Upload failed:", error);
-                            const localUrl = URL.createObjectURL(file);
-                            setMapImageFiles([
-                              {
-                                id: Date.now().toString(),
-                                url: localUrl,
-                                name: file.name,
-                                type: "image",
-                                size: file.size,
-                                file: file,
-                                uploaded: false,
-                              },
-                            ]);
-                          }
-                        }
-                      }}
-                      className="w-full"
-                    />
-                  </div>
-                </div>
-                {mapImageFiles.length > 0 && (
-                  <div>
-                    <Label>Click on the image to place answer boxes</Label>
-                    <div className="relative inline-block">
-                      <img
-                        src={mapImageFiles[0].url}
-                        alt="Preview"
-                        className="max-w-full h-auto border rounded mt-2"
-                        style={{ cursor: "crosshair" }}
-                        onClick={(e) => {
-                          let rect: DOMRect | undefined;
-                          if (e.target && e.target instanceof HTMLImageElement) {
-                            rect = e.target.getBoundingClientRect();
-                          } else {
-                            return;
-                          }
-                          const x = ((e.clientX - rect.left) / rect.width) * 100;
-                          const y = ((e.clientY - rect.top) / rect.height) * 100;
-                          const nextQuestionNumber = questionCounter + mapBoxes.length;
-                          const newBox = {
-                            id: Date.now(),
-                            x,
-                            y,
-                            label: `${nextQuestionNumber}`,
-                            answer: "",
-                          };
-                          setMapBoxes([...mapBoxes, newBox]);
-                        }}
-                      />
-                      {mapBoxes.map((box, idx) => (
-                        <div
-                          key={box.id}
-                          className="absolute bg-blue-600 text-white rounded px-1 py-1 text-xs font-bold"
-                          style={{
-                            left: `${box.x}%`,
-                            top: `${box.y}%`,
-                            transform: "translate(-50%, -50%)",
-                            minWidth: "60px",
-                            textAlign: "center",
-                            cursor: "pointer",
-                          }}
-                          onClick={() => {
-                            // Remove box on click
-                            setMapBoxes(mapBoxes.filter((b) => b.id !== box.id));
-                          }}
-                        >
-                          {box.label}
-                        </div>
-                      ))}
-                    </div>
-                    {mapBoxes.length > 0 && (
-                      <div className="mt-4 space-y-3">
-                        <h4 className="font-semibold text-sm text-gray-700">Box Labels and Answers:</h4>
-                        {mapBoxes.map((box, idx) => (
-                          <div key={box.id} className="flex items-center gap-2 mb-2">
-                            <span className="bg-blue-600 text-white px-2 py-1 rounded text-xs font-bold min-w-[30px] text-center">{box.label}</span>
-                            <Input
-                              type="text"
-                              value={box.answer || ""}
-                              onChange={(e) => {
-                                const updated = mapBoxes.map((b) =>
-                                  b.id === box.id ? { ...b, answer: e.target.value } : b,
-                                );
-                                setMapBoxes(updated);
-                              }}
-                              className="border rounded px-2 py-1 text-xs flex-1"
-                              placeholder="Enter correct answer"
-                            />
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => setMapBoxes(mapBoxes.filter((b) => b.id !== box.id))}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Map/Diagram modal removed */}
 
             {/* TFNG */}
             {currentQuestionType === "tfng" && (

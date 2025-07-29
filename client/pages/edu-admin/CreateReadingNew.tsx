@@ -26,9 +26,7 @@ interface Question {
   type:
     | "short_answer"
     | "multiple_choice"
-    | "matching"
-    | "map_diagram"
-    | "table";
+    | "matching";
   content: any;
   summary: string;
   attrs?: any; // Add attrs property for compatibility
@@ -202,13 +200,34 @@ const CreateReadingNew: React.FC = () => {
           .single();
 
         if (section) {
-          // Count questions for this section
-          const { count } = await supabase
+          // Get all questions for this section to count them properly
+          const { data: questions } = await supabase
             .from("reading_questions")
-            .select("*", { count: "exact", head: true })
+            .select("question_type, correct_answer")
             .eq("reading_section_id", section.id);
 
-          totalPreviousQuestions += count || 0;
+          if (questions) {
+            questions.forEach((question: any) => {
+              if (question.question_type === "matching") {
+                // For matching questions, count each pair as a separate question
+                try {
+                  const pairs = typeof question.correct_answer === "string" 
+                    ? JSON.parse(question.correct_answer) 
+                    : question.correct_answer;
+                  if (pairs && pairs.left && Array.isArray(pairs.left)) {
+                    totalPreviousQuestions += pairs.left.length;
+                  } else {
+                    totalPreviousQuestions += 1; // Fallback
+                  }
+                } catch {
+                  totalPreviousQuestions += 1; // Fallback
+                }
+              } else {
+                // For other question types, count as 1
+                totalPreviousQuestions += 1;
+              }
+            });
+          }
         }
       }
 
@@ -250,48 +269,51 @@ const CreateReadingNew: React.FC = () => {
     setEditorQuestions(editorQuestions);
     // Convert editor questions to parent Question type for summary and persistence
     const convertedQuestions = editorQuestions.map((q, index) => {
+      // Add null checks to prevent errors
+      const questionContent = q?.content || {};
+      
       let options = null;
       let correctAnswer = null;
       if (q.type === "multiple_choice") {
-        options = q.content.options;
-        correctAnswer = q.content.correctAnswer;
+        options = questionContent.options;
+        correctAnswer = questionContent.correctAnswer;
       } else if (q.type === "matching") {
         // For matching questions, use data directly from TipTap node (like listening test)
-        if (q.content.left && q.content.right && Array.isArray(q.content.left) && Array.isArray(q.content.right)) {
+        if (questionContent.left && questionContent.right && Array.isArray(questionContent.left) && Array.isArray(questionContent.right)) {
           // Set options to contain the left and right arrays for matching questions
-          options = JSON.stringify({ left: q.content.left, right: q.content.right });
+          options = JSON.stringify({ left: questionContent.left, right: questionContent.right });
           
           console.log("🔍 Matching Question (simplified):", {
             questionNumber: index + 1,
-            left: q.content.left,
-            right: q.content.right,
+            left: questionContent.left,
+            right: questionContent.right,
             options
           });
         }
       } else if (q.type === "short_answer") {
         // For short answer questions, try to get correct answer from multiple sources
-        if (Array.isArray(q.content.answers) && q.content.answers.length > 0) {
-          correctAnswer = q.content.answers.join(", ");
-        } else if (q.content.correctAnswer) {
-          correctAnswer = q.content.correctAnswer;
-        } else if (q.content.correct_answer) {
-          correctAnswer = q.content.correct_answer;
+        if (Array.isArray(questionContent.answers) && questionContent.answers.length > 0) {
+          correctAnswer = questionContent.answers.join(", ");
+        } else if (questionContent.correctAnswer) {
+          correctAnswer = questionContent.correctAnswer;
+        } else if (questionContent.correct_answer) {
+          correctAnswer = questionContent.correct_answer;
         }
       } else {
         // For other question types, try to get correct answer
-        correctAnswer = q.content.correctAnswer || q.content.correct_answer || null;
+        correctAnswer = questionContent.correctAnswer || questionContent.correct_answer || null;
       }
 
       return {
         id: q.id,
         type: q.type,
-        text: q.content.question || q.content.text || q.content.prompt || `Question ${index + 1}`,
+        text: questionContent.question || questionContent.text || questionContent.prompt || `Question ${index + 1}`,
         options,
         correctAnswer,
         points: 1,
         position: index + 1,
-        content: q.content,
-        summary: q.content.question || q.content.text || q.content.prompt || `Question ${index + 1}`,
+        content: questionContent,
+        summary: questionContent.question || questionContent.text || questionContent.prompt || `Question ${index + 1}`,
       } as Question;
     });
     setQuestions(convertedQuestions);
@@ -330,14 +352,26 @@ const CreateReadingNew: React.FC = () => {
       } else if (q.type === "short_answer") {
         // For short answer questions, check multiple sources
         hasCorrectAnswer = 
-          q.content?.correctAnswer ||
-          q.content?.correct_answer ||
+          typeof q.content?.correctAnswer !== 'undefined' ||
+          typeof q.content?.correct_answer !== 'undefined' ||
           (Array.isArray(q.content?.answers) && q.content.answers.length > 0);
       } else {
         // For other question types, check standard correct answer fields
+        // Use typeof to check if the value exists (including 0)
         hasCorrectAnswer = 
-          q.content?.correctAnswer ||
-          q.content?.correct_answer;
+          typeof q.content?.correctAnswer !== 'undefined' ||
+          typeof q.content?.correct_answer !== 'undefined';
+      }
+      
+      // Debug logging for questions without answers
+      if (!hasCorrectAnswer) {
+        console.warn("❌ Question missing correct answer:", {
+          type: q.type,
+          content: q.content,
+          correctAnswer: q.content?.correctAnswer,
+          correct_answer: q.content?.correct_answer,
+          answers: q.content?.answers
+        });
       }
       
       return !hasCorrectAnswer;
@@ -415,9 +449,7 @@ const CreateReadingNew: React.FC = () => {
       const ALLOWED_TYPES = new Set([
         "multiple_choice",
         "short_answer",
-        "matching",
-        "map_labeling",
-        "map_diagram"
+        "matching"
       ]);
 
       // Log all question types before filtering
@@ -434,16 +466,16 @@ const CreateReadingNew: React.FC = () => {
           dbQuestionType = "multiple_choice";
         } else if (question.type === "short_answer") {
           dbQuestionType = "short_answer";
-        } else if (question.type === "matching") {
+                } else if (question.type === "matching") {
           dbQuestionType = "matching";
-        } else if (question.type === "map_diagram") {
-          dbQuestionType = "map_labeling";
         }
 
         // Extract correct answer based on question type
         let correctAnswer = null;
         if (question.type === "multiple_choice") {
-          correctAnswer = question.content?.correctAnswer || question.content?.correct_answer;
+          // For MCQ, save the index as a number (not string)
+          const correctIndex = question.content?.correctAnswer || question.content?.correct_answer;
+          correctAnswer = typeof correctIndex === 'number' ? correctIndex : parseInt(correctIndex) || 0;
         } else if (question.type === "matching") {
           // For matching questions, use data directly from TipTap node (like listening test)
           if (question.content?.left && question.content?.right && Array.isArray(question.content.left) && Array.isArray(question.content.right)) {
@@ -472,10 +504,6 @@ const CreateReadingNew: React.FC = () => {
             } else {
               correctAnswer = JSON.stringify([question.content.correct_answer]);
             }
-          }
-        } else if (question.type === "map_diagram") {
-          if (question.content?.boxes && Array.isArray(question.content.boxes)) {
-            correctAnswer = JSON.stringify(question.content.boxes);
           }
         } else {
           correctAnswer = question.content?.correctAnswer || question.content?.correct_answer;
@@ -521,14 +549,14 @@ const CreateReadingNew: React.FC = () => {
         
         return {
           reading_section_id: section.id,
-          question_number: index + 1,
+          question_number: question.content?.question_number || index + 1,
           question_type: dbQuestionType,
-          question_text: question.content?.text || question.summary,
+          question_text: question.content?.question || question.content?.text || question.summary,
           options: optionsField,
           correct_answer: correctAnswer,
           points: 1, // Default points
           explanation: "",
-          question_order: index + 1,
+          question_order: question.content?.question_number || index + 1,
         };
       });
 
