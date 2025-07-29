@@ -67,6 +67,7 @@ const CreateListeningNew: React.FC = () => {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [editorRef, setEditorRef] = useState<any>(null);
+  const [startingQuestionNumber, setStartingQuestionNumber] = useState(1);
 
   // Add a stable storage key for the whole page
   const pageDraftKey = `listening-page-draft-${testId || 'default'}-${sectionNumber || 'default'}`;
@@ -100,6 +101,14 @@ const CreateListeningNew: React.FC = () => {
   // Add a function to clear the draft
   const clearPageDraft = () => {
     localStorage.removeItem(pageDraftKey);
+  };
+
+  const calculateStartingQuestionNumber = () => {
+    const currentSectionNum = parseInt(sectionNumber || "1");
+    // Each section has 10 questions: Section 1 (1-10), Section 2 (11-20), etc.
+    const startingNumber = (currentSectionNum - 1) * 10 + 1;
+    console.log(`📊 Listening Section ${currentSectionNum}: Starting with question ${startingNumber}`);
+    setStartingQuestionNumber(startingNumber);
   };
 
   // Update questions from editor
@@ -545,6 +554,9 @@ const CreateListeningNew: React.FC = () => {
 
         setCurrentTest(testData);
         console.log("Test loaded successfully:", testData.title);
+        
+        // Calculate starting question number for this section
+        calculateStartingQuestionNumber();
       } catch (error: any) {
         console.error("❌ Error loading test:", error);
         console.error("📊 Error type:", typeof error);
@@ -1215,6 +1227,7 @@ const CreateListeningNew: React.FC = () => {
           onQuestionsChange={handleEditorQuestionsChange}
           placeholder="Enter your listening section content here. Use the toolbar to add questions."
           initialContent={content}
+          startingQuestionNumber={startingQuestionNumber}
         />
       </div>
 

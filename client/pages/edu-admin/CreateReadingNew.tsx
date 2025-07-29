@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
-import UnifiedTestEditor from "@/components/test-creation/UnifiedTestEditor";
+import ReadingTestEditor from "@/components/test-creation/ReadingTestEditor";
 import { fetchTestById } from "@/lib/supabaseUtils";
 
 interface Question {
@@ -54,6 +54,9 @@ const CreateReadingNew: React.FC = () => {
   const [currentTest, setCurrentTest] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState({ type: "", content: "" });
+  const [startingQuestionNumber, setStartingQuestionNumber] = useState(1);
+  const [editorQuestions, setEditorQuestions] = useState<any[]>([]);
+  const [editorResetKey, setEditorResetKey] = useState(0);
 
   // Add a stable storage key for the whole page
   const pageDraftKey = `reading-page-draft-${testId || 'default'}-${passageNumber || 'default'}`;
@@ -66,6 +69,7 @@ const CreateReadingNew: React.FC = () => {
       passageText,
       content: typeof content === "string" ? content : JSON.stringify(content),
       questions,
+      editorQuestions,
       ...extra,
       timestamp: new Date().toISOString(),
     };
@@ -113,8 +117,25 @@ const CreateReadingNew: React.FC = () => {
       setPassageTitle(draft.passageTitle || passageTitle);
       setPassageInstructions(draft.passageInstructions || passageInstructions);
       setPassageText(draft.passageText || "");
-      setContent(draft.content || "");
+      
+      // Parse content properly - handle both string and object formats
+      let parsedContent = "";
+      if (draft.content) {
+        if (typeof draft.content === "string") {
+          try {
+            parsedContent = JSON.parse(draft.content);
+          } catch {
+            // If it's not valid JSON, treat it as plain text
+            parsedContent = draft.content;
+          }
+        } else {
+          parsedContent = draft.content;
+        }
+      }
+      setContent(parsedContent);
+      
       setQuestions(draft.questions || []);
+      setEditorQuestions(draft.editorQuestions || []);
       
       // Show a message that draft was loaded
       setMessage({
@@ -131,10 +152,10 @@ const CreateReadingNew: React.FC = () => {
 
   // Auto-save draft when content changes
   useEffect(() => {
-    if (passageTitle || passageInstructions || passageText || content || questions.length > 0) {
+    if (passageTitle || passageInstructions || passageText || content || questions.length > 0 || editorQuestions.length > 0) {
       savePageDraft();
     }
-  }, [passageTitle, passageInstructions, passageText, content, questions]);
+  }, [passageTitle, passageInstructions, passageText, content, questions, editorQuestions]);
 
   const fetchTest = async () => {
     try {
@@ -146,6 +167,9 @@ const CreateReadingNew: React.FC = () => {
       const testData = await fetchTestById(testId);
       setCurrentTest(testData);
       console.log("Test loaded successfully:", testData);
+      
+      // Calculate starting question number for this passage
+      await calculateStartingQuestionNumber();
     } catch (error: any) {
       console.error("Error fetching test:", error?.message || error);
       setMessage({
@@ -155,12 +179,122 @@ const CreateReadingNew: React.FC = () => {
     }
   };
 
+  const calculateStartingQuestionNumber = async () => {
+    try {
+      const currentPassageNum = parseInt(passageNumber || "1");
+      
+      if (currentPassageNum === 1) {
+        // First passage starts with question 1
+        setStartingQuestionNumber(1);
+        return;
+      }
+
+      // Fetch all questions from previous passages
+      let totalPreviousQuestions = 0;
+      
+      for (let i = 1; i < currentPassageNum; i++) {
+        // Get the reading section for this passage
+        const { data: section } = await supabase
+          .from("reading_sections")
+          .select("id")
+          .eq("test_id", testId)
+          .eq("passage_number", i)
+          .single();
+
+        if (section) {
+          // Count questions for this section
+          const { count } = await supabase
+            .from("reading_questions")
+            .select("*", { count: "exact", head: true })
+            .eq("reading_section_id", section.id);
+
+          totalPreviousQuestions += count || 0;
+        }
+      }
+
+      console.log(`📊 Passage ${currentPassageNum}: Previous passages have ${totalPreviousQuestions} questions`);
+      setStartingQuestionNumber(totalPreviousQuestions + 1);
+    } catch (error) {
+      console.error("Error calculating starting question number:", error);
+      // Fallback to 1 if there's an error
+      setStartingQuestionNumber(1);
+    }
+  };
+
   const handleContentChange = (newContent: any) => {
-    setContent(newContent);
+    console.log("🔍 CreateReadingNew handleContentChange - Content received from editor:", {
+      contentType: typeof newContent,
+      contentLength: typeof newContent === "string" ? newContent.length : JSON.stringify(newContent).length,
+      hasShortAnswerNodes: typeof newContent === "string" ? newContent.includes('"type":"short_answer"') : JSON.stringify(newContent).includes('"type":"short_answer"'),
+      hasMatchingNodes: typeof newContent === "string" ? newContent.includes('"type":"matching"') : JSON.stringify(newContent).includes('"type":"matching"'),
+      hasMCQNodes: typeof newContent === "string" ? newContent.includes('"type":"mcq"') : JSON.stringify(newContent).includes('"type":"mcq"'),
+      nodeTypes: typeof newContent === "object" && newContent?.content ? newContent.content.map((n: any) => n.type) : [],
+      fullContent: typeof newContent === "object" ? newContent : null
+    });
+    
+    // Only update content if it's different to avoid loops
+    if (JSON.stringify(newContent) !== JSON.stringify(content)) {
+      console.log("🔍 Updating content in parent component");
+      setContent(newContent);
+    } else {
+      console.log("🔍 Content unchanged, skipping update");
+    }
   };
 
   const handleQuestionsChange = (newQuestions: Question[]) => {
     setQuestions(newQuestions);
+  };
+
+  const handleEditorQuestionsChange = (editorQuestions: any[]) => {
+    console.log("🔍 Processing Editor Questions:", editorQuestions);
+    setEditorQuestions(editorQuestions);
+    // Convert editor questions to parent Question type for summary and persistence
+    const convertedQuestions = editorQuestions.map((q, index) => {
+      let options = null;
+      let correctAnswer = null;
+      if (q.type === "multiple_choice") {
+        options = q.content.options;
+        correctAnswer = q.content.correctAnswer;
+      } else if (q.type === "matching") {
+        // For matching questions, use data directly from TipTap node (like listening test)
+        if (q.content.left && q.content.right && Array.isArray(q.content.left) && Array.isArray(q.content.right)) {
+          // Set options to contain the left and right arrays for matching questions
+          options = JSON.stringify({ left: q.content.left, right: q.content.right });
+          
+          console.log("🔍 Matching Question (simplified):", {
+            questionNumber: index + 1,
+            left: q.content.left,
+            right: q.content.right,
+            options
+          });
+        }
+      } else if (q.type === "short_answer") {
+        // For short answer questions, try to get correct answer from multiple sources
+        if (Array.isArray(q.content.answers) && q.content.answers.length > 0) {
+          correctAnswer = q.content.answers.join(", ");
+        } else if (q.content.correctAnswer) {
+          correctAnswer = q.content.correctAnswer;
+        } else if (q.content.correct_answer) {
+          correctAnswer = q.content.correct_answer;
+        }
+      } else {
+        // For other question types, try to get correct answer
+        correctAnswer = q.content.correctAnswer || q.content.correct_answer || null;
+      }
+
+      return {
+        id: q.id,
+        type: q.type,
+        text: q.content.question || q.content.text || q.content.prompt || `Question ${index + 1}`,
+        options,
+        correctAnswer,
+        points: 1,
+        position: index + 1,
+        content: q.content,
+        summary: q.content.question || q.content.text || q.content.prompt || `Question ${index + 1}`,
+      } as Question;
+    });
+    setQuestions(convertedQuestions);
   };
 
   const saveReadingSection = async () => {
@@ -182,10 +316,29 @@ const CreateReadingNew: React.FC = () => {
 
     // Validate that all questions have correct answers
     const questionsWithoutAnswers = questions.filter(q => {
-      const hasCorrectAnswer = 
-        q.content?.correctAnswer ||
-        q.content?.correct_answer ||
-        (Array.isArray(q.content?.answers) && q.content.answers.length > 0);
+      let hasCorrectAnswer = false;
+      
+      if (q.type === "matching") {
+        // For matching questions, check if left and right arrays exist and have content
+        hasCorrectAnswer = 
+          Array.isArray(q.content?.left) && 
+          Array.isArray(q.content?.right) && 
+          q.content.left.length > 0 && 
+          q.content.right.length > 0 &&
+          q.content.left.every((item: string) => item.trim() !== "") &&
+          q.content.right.every((item: string) => item.trim() !== "");
+      } else if (q.type === "short_answer") {
+        // For short answer questions, check multiple sources
+        hasCorrectAnswer = 
+          q.content?.correctAnswer ||
+          q.content?.correct_answer ||
+          (Array.isArray(q.content?.answers) && q.content.answers.length > 0);
+      } else {
+        // For other question types, check standard correct answer fields
+        hasCorrectAnswer = 
+          q.content?.correctAnswer ||
+          q.content?.correct_answer;
+      }
       
       return !hasCorrectAnswer;
     });
@@ -203,6 +356,17 @@ const CreateReadingNew: React.FC = () => {
 
     try {
       // Create or update reading section with the dedicated passage text
+      // Log the content being saved
+      console.log("🔍 Content being saved to database:", {
+        contentType: typeof content,
+        contentLength: typeof content === "string" ? content.length : JSON.stringify(content).length,
+        hasShortAnswerNodes: typeof content === "string" ? content.includes('"type":"short_answer"') : JSON.stringify(content).includes('"type":"short_answer"'),
+        hasMatchingNodes: typeof content === "string" ? content.includes('"type":"matching"') : JSON.stringify(content).includes('"type":"matching"'),
+        hasMCQNodes: typeof content === "string" ? content.includes('"type":"mcq"') : JSON.stringify(content).includes('"type":"mcq"'),
+        nodeTypes: typeof content === "object" && content && 'content' in content && Array.isArray((content as any).content) ? (content as any).content.map((n: any) => n.type) : [],
+        fullContent: typeof content === "object" ? content : null
+      });
+      
       const sectionDataToSave = {
         test_id: testId,
         title: passageTitle,
@@ -212,6 +376,14 @@ const CreateReadingNew: React.FC = () => {
         section_order: parseInt(passageNumber || "1"),
         content: typeof content === "string" ? content : JSON.stringify(content), // Save the content with embedded questions
       };
+      
+      console.log("🔍 Saving reading section:", {
+        passageNumber: passageNumber,
+        title: passageTitle,
+        contentType: typeof content,
+        contentLength: typeof content === "string" ? content.length : JSON.stringify(content).length,
+        hasContent: !!content
+      });
 
       const { data: section, error: sectionError } = await supabase
         .from("reading_sections")
@@ -239,50 +411,120 @@ const CreateReadingNew: React.FC = () => {
         }
       }
 
-      // Create questions
-      const questionsToInsert = questions.map((question, index) => {
+      // Only allow supported question types for DB
+      const ALLOWED_TYPES = new Set([
+        "multiple_choice",
+        "short_answer",
+        "matching",
+        "map_labeling",
+        "map_diagram"
+      ]);
+
+      // Log all question types before filtering
+      console.log("All question types before save:", questions.map(q => q.type));
+
+      // Filter only allowed types
+      const filteredQuestions = questions.filter(q => ALLOWED_TYPES.has(q.type));
+      console.log("Filtered question types to be saved:", filteredQuestions.map(q => q.type));
+
+      const questionsToInsert = filteredQuestions.map((question, index) => {
+        // Normalize question_type to match allowed DB values
+        let dbQuestionType = "short_answer";
+        if (question.type === "multiple_choice") {
+          dbQuestionType = "multiple_choice";
+        } else if (question.type === "short_answer") {
+          dbQuestionType = "short_answer";
+        } else if (question.type === "matching") {
+          dbQuestionType = "matching";
+        } else if (question.type === "map_diagram") {
+          dbQuestionType = "map_labeling";
+        }
+
         // Extract correct answer based on question type
         let correctAnswer = null;
-        
         if (question.type === "multiple_choice") {
           correctAnswer = question.content?.correctAnswer || question.content?.correct_answer;
         } else if (question.type === "matching") {
-          // For matching questions, create pairs from left and right arrays
+          // For matching questions, use data directly from TipTap node (like listening test)
           if (question.content?.left && question.content?.right && Array.isArray(question.content.left) && Array.isArray(question.content.right)) {
-            const pairs = question.content.left.map((leftItem: string, pairIndex: number) => ({
-              left: leftItem,
-              right: question.content.right[pairIndex] || ""
-            }));
-            correctAnswer = JSON.stringify(pairs);
-          } else {
-            correctAnswer = question.content?.correctAnswer ? JSON.stringify(question.content.correctAnswer) : null;
+            // Store the left and right arrays directly (like listening test)
+            correctAnswer = JSON.stringify({ left: question.content.left, right: question.content.right });
+            console.log("🔍 Matching Question Database Save (simplified):", {
+              questionNumber: index + 1,
+              left: question.content.left,
+              right: question.content.right,
+              correctAnswer
+            });
           }
         } else if (question.type === "short_answer") {
-          // For short answer questions, try to get correct answer from multiple sources
+          // Always save as JSON array
           if (Array.isArray(question.content?.answers) && question.content.answers.length > 0) {
-            correctAnswer = question.content.answers.join(", ");
+            correctAnswer = JSON.stringify(question.content.answers);
           } else if (question.content?.correctAnswer) {
-            correctAnswer = question.content.correctAnswer;
+            if (Array.isArray(question.content.correctAnswer)) {
+              correctAnswer = JSON.stringify(question.content.correctAnswer);
+            } else {
+              correctAnswer = JSON.stringify([question.content.correctAnswer]);
+            }
           } else if (question.content?.correct_answer) {
-            correctAnswer = question.content.correct_answer;
+            if (Array.isArray(question.content.correct_answer)) {
+              correctAnswer = JSON.stringify(question.content.correct_answer);
+            } else {
+              correctAnswer = JSON.stringify([question.content.correct_answer]);
+            }
+          }
+        } else if (question.type === "map_diagram") {
+          if (question.content?.boxes && Array.isArray(question.content.boxes)) {
+            correctAnswer = JSON.stringify(question.content.boxes);
           }
         } else {
-          // For other question types, try to get correct answer
           correctAnswer = question.content?.correctAnswer || question.content?.correct_answer;
         }
 
-        // Ensure we have a valid correct answer
         if (!correctAnswer) {
           console.warn(`Warning: No correct answer found for question ${index + 1} (${question.type})`);
-          correctAnswer = ""; // Provide empty string instead of null
+          correctAnswer = "";
         }
 
+        // Handle options field based on question type
+        let optionsField = null;
+        if (question.type === "matching" && question.content?.left && question.content?.right) {
+          optionsField = JSON.stringify({ left: question.content.left, right: question.content.right });
+        } else if (question.content?.options) {
+          optionsField = JSON.stringify(question.content.options);
+        }
+
+        // Add logging for what is being saved
+        console.log("📝 Saving question to DB:", {
+          question_type: dbQuestionType,
+          question_text: question.content?.text || question.summary,
+          options: optionsField,
+          correct_answer: correctAnswer,
+          points: 1,
+          question_order: index + 1
+        });
+        
+        // Log the content being saved
+        console.log("📝 Content being saved:", {
+          contentType: typeof content,
+          contentPreview: typeof content === "string" ? content.substring(0, 200) + "..." : JSON.stringify(content).substring(0, 200) + "...",
+          hasShortAnswerNodes: typeof content === "string" ? content.includes('"type":"short_answer"') : JSON.stringify(content).includes('"type":"short_answer"'),
+          hasMatchingNodes: typeof content === "string" ? content.includes('"type":"matching"') : JSON.stringify(content).includes('"type":"matching"'),
+          hasMCQNodes: typeof content === "string" ? content.includes('"type":"mcq"') : JSON.stringify(content).includes('"type":"mcq"')
+        });
+        
+        // Log the full content structure
+        console.log("📝 Full content structure:", {
+          content: typeof content === "string" ? JSON.parse(content) : content,
+          contentString: typeof content === "string" ? content : JSON.stringify(content)
+        });
+        
         return {
           reading_section_id: section.id,
           question_number: index + 1,
-          question_type: question.type,
+          question_type: dbQuestionType,
           question_text: question.content?.text || question.summary,
-          options: question.content?.options ? JSON.stringify(question.content.options) : null,
+          options: optionsField,
           correct_answer: correctAnswer,
           points: 1, // Default points
           explanation: "",
@@ -466,11 +708,15 @@ const CreateReadingNew: React.FC = () => {
             </p>
           </CardHeader>
           <CardContent>
-            <UnifiedTestEditor
-              initialContent={content}
+            <ReadingTestEditor
+              key={editorResetKey}
+              content={content}
               onContentChange={handleContentChange}
+              questions={editorQuestions}
               onQuestionsChange={handleQuestionsChange}
+              onEditorQuestionsChange={handleEditorQuestionsChange}
               placeholder="Add questions here. You can insert multiple choice, short answer, matching, and other question types."
+              startingQuestionNumber={startingQuestionNumber}
             />
           </CardContent>
         </Card>
@@ -487,6 +733,8 @@ const CreateReadingNew: React.FC = () => {
                 setPassageText("");
                 setContent("");
                 setQuestions([]);
+                setEditorQuestions([]);
+                setEditorResetKey((k) => k + 1); // force remount editor
                 setMessage({
                   type: "success",
                   content: "Draft cleared successfully.",

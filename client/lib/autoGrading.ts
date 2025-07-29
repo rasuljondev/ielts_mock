@@ -333,17 +333,18 @@ export const autoGradeSubmission = async (
         (section: any) => section.reading_questions || [],
       ) || [];
 
-    const readingResults = readingQuestions.map((question: any) => {
+    const readingResults: QuestionResult[] = [];
+    
+    readingQuestions.forEach((question: any) => {
       // Use the same helper function for reading questions
       const userAnswer = findStudentAnswer(question, userAnswers);
-      let correctAnswer = question.correct_answer;
       
       // Special handling for MCQ questions
       if (question.question_type === "multiple_choice") {
         console.log("🔍 Processing Reading MCQ Question:", {
           questionId: question.id,
-          correctAnswer: correctAnswer,
-          correctAnswerType: typeof correctAnswer,
+          correctAnswer: question.correct_answer,
+          correctAnswerType: typeof question.correct_answer,
           options: question.options,
           userAnswer: userAnswer
         });
@@ -358,17 +359,25 @@ export const autoGradeSubmission = async (
           }
           
           if (Array.isArray(options) && options.length > 0) {
-            const correctIndex = parseInt(correctAnswer);
+            const correctIndex = parseInt(question.correct_answer);
             if (!isNaN(correctIndex) && correctIndex >= 0 && correctIndex < options.length) {
-              correctAnswer = options[correctIndex];
-              console.log("🔍 Converted Reading MCQ index to option text:", {
-                originalIndex: correctAnswer,
-                convertedAnswer: correctAnswer,
-                options: options
+              const correctAnswer = options[correctIndex];
+              const isCorrect = answersMatch(userAnswer, correctAnswer);
+              
+              readingResults.push({
+                questionId: question.id,
+                questionText: question.question_text,
+                questionType: question.question_type,
+                userAnswer,
+                correctAnswer: correctAnswer,
+                isCorrect,
+                points: isCorrect ? question.points || 1 : 0,
+                section: "reading" as const,
+                explanation: question.explanation,
               });
             } else {
               console.warn("🔍 Invalid Reading MCQ correct answer index:", {
-                correctAnswer,
+                correctAnswer: question.correct_answer,
                 optionsLength: options.length
               });
             }
@@ -383,27 +392,132 @@ export const autoGradeSubmission = async (
         }
       }
       
-      const isCorrect = answersMatch(userAnswer, correctAnswer);
+      // Special handling for matching questions
+      else if (question.question_type === "matching") {
+        console.log("🔍 Processing Reading Matching Question:", {
+          questionId: question.id,
+          correctAnswer: question.correct_answer,
+          correctAnswerType: typeof question.correct_answer,
+        });
+        
+        try {
+          let matchingData;
+          try {
+            if (typeof question.correct_answer === "string") {
+              matchingData = JSON.parse(question.correct_answer);
+            } else {
+              matchingData = question.correct_answer;
+            }
+          } catch (parseError) {
+            console.error("Error parsing reading matching correct_answer:", parseError);
+            matchingData = null;
+          }
+          
+          console.log("🔍 Parsed matching data:", matchingData);
+          
+          // For reading matching questions, the correct_answer is stored as {"left": [...], "right": [...]}
+          if (matchingData && matchingData.left && matchingData.right) {
+            const leftItems = matchingData.left;
+            const rightItems = matchingData.right;
+            
+            console.log("🔍 Processing matching pairs:", { leftItems, rightItems });
+            
+            // Process each pair individually like listening system
+            leftItems.forEach((leftItem: string, index: number) => {
+              const studentAnswerKey = `${question.id}_${index}`;
+              const studentAnswer = userAnswers[studentAnswerKey];
+              const correctAnswer = rightItems[index];
+              const isCorrect = answersMatch(studentAnswer, correctAnswer);
+              
+              console.log("🔍 Matching pair result:", {
+                studentAnswerKey,
+                studentAnswer,
+                correctAnswer,
+                isCorrect
+              });
+              
+              readingResults.push({
+                questionId: studentAnswerKey,
+                questionText: `${question.question_number}. ${leftItem}`,
+                questionType: "matching",
+                userAnswer: studentAnswer || "No answer provided",
+                correctAnswer: correctAnswer || "No correct answer set",
+                isCorrect,
+                points: isCorrect ? question.points || 1 : 0,
+                section: "reading" as const,
+                explanation: question.explanation,
+              });
+            });
+          } else {
+            console.warn("🔍 Invalid matching data structure:", matchingData);
+          }
+        } catch (error) {
+          console.error("🔍 Error processing reading matching question:", error);
+        }
+      }
       
-      console.log("🔍 Reading Question grading result:", {
-        questionId: question.id,
-        questionType: question.question_type,
-        userAnswer,
-        correctAnswer,
-        isCorrect
-      });
+      // Special handling for short answer questions
+      else if (question.question_type === "short_answer") {
+        try {
+          let correctAnswer = question.correct_answer;
+          
+          // Parse correct answer if it's stored as JSON
+          if (typeof correctAnswer === "string") {
+            try {
+              const parsed = JSON.parse(correctAnswer);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                correctAnswer = parsed[0]; // Take the first answer if it's an array
+              }
+            } catch (e) {
+              // If parsing fails, use as is
+              correctAnswer = question.correct_answer;
+            }
+          } else if (Array.isArray(correctAnswer) && correctAnswer.length > 0) {
+            correctAnswer = correctAnswer[0]; // Take the first answer if it's an array
+          }
+          
+          const isCorrect = answersMatch(userAnswer, correctAnswer);
+          
+          readingResults.push({
+            questionId: question.id,
+            questionText: question.question_text,
+            questionType: question.question_type,
+            userAnswer: userAnswer || "No answer provided",
+            correctAnswer: correctAnswer || "No correct answer set",
+            isCorrect,
+            points: isCorrect ? question.points || 1 : 0,
+            section: "reading" as const,
+            explanation: question.explanation,
+          });
+        } catch (error) {
+          console.error("🔍 Error processing reading short answer question:", error);
+        }
+      }
       
-      return {
-        questionId: question.id,
-        questionText: question.question_text,
-        questionType: question.question_type,
-        userAnswer,
-        correctAnswer: correctAnswer,
-        isCorrect,
-        points: isCorrect ? question.points || 1 : 0,
-        section: "reading" as const,
-        explanation: question.explanation,
-      };
+      // Default processing for other question types
+      else {
+        const isCorrect = answersMatch(userAnswer, question.correct_answer);
+        
+        console.log("🔍 Reading Question grading result:", {
+          questionId: question.id,
+          questionType: question.question_type,
+          userAnswer,
+          correctAnswer: question.correct_answer,
+          isCorrect
+        });
+        
+        readingResults.push({
+          questionId: question.id,
+          questionText: question.question_text,
+          questionType: question.question_type,
+          userAnswer,
+          correctAnswer: question.correct_answer,
+          isCorrect,
+          points: isCorrect ? question.points || 1 : 0,
+          section: "reading" as const,
+          explanation: question.explanation,
+        });
+      }
     });
 
     // Process listening questions

@@ -50,7 +50,7 @@ interface Question {
   summary: string;
 }
 
-interface UnifiedTestEditorProps {
+interface ReadingTestEditorProps {
   onQuestionsChange?: (questions: Question[]) => void;
   onEditorQuestionsChange?: (editorQuestions: any[]) => void;
   placeholder?: string;
@@ -63,8 +63,8 @@ interface EditorQuestionMapping {
   editorPosition: number;
 }
 
-export function UnifiedTestEditor(
-  props: UnifiedTestEditorProps & { content?: any; onContentChange?: (json: any) => void; questions?: Question[] }
+export function ReadingTestEditor(
+  props: ReadingTestEditorProps & { content?: any; onContentChange?: (json: any) => void; questions?: Question[] }
 ) {
   const {
     onQuestionsChange,
@@ -97,6 +97,11 @@ export function UnifiedTestEditor(
   const [mapImageFiles, setMapImageFiles] = useState<MediaFile[]>([]);
   const [mapAnswers, setMapAnswers] = useState<string[]>([""]);
   const [mapBoxes, setMapBoxes] = useState<{ id: number; x: number; y: number; label: string; answer: string }[]>([]);
+  // Add TFNG state
+  const [tfngQuestion, setTfngQuestion] = useState("");
+  const [tfngCorrectOption, setTfngCorrectOption] = useState(0);
+  // Add error state for MCQ/TFNG
+  const [optionError, setOptionError] = useState("");
 
   const editor = useEditor({
     extensions: [
@@ -125,33 +130,108 @@ export function UnifiedTestEditor(
     },
     onUpdate: ({ editor }) => {
       if (onContentChange) {
-        onContentChange(editor.getJSON());
+        const editorContent = editor.getJSON();
+        const questions = extractQuestionsFromContent(editorContent);
+        console.log("🔍 ReadingTestEditor onUpdate - Content being sent to parent:", {
+          contentLength: JSON.stringify(editorContent).length,
+          hasShortAnswerNodes: JSON.stringify(editorContent).includes('"type":"short_answer"'),
+          hasMatchingNodes: JSON.stringify(editorContent).includes('"type":"matching"'),
+          hasMCQNodes: JSON.stringify(editorContent).includes('"type":"mcq"'),
+          nodeTypes: editorContent?.content?.map((n: any) => n.type) || [],
+          extractedQuestions: questions.length
+        });
+        onContentChange(editorContent);
+        if (onEditorQuestionsChange) {
+          onEditorQuestionsChange(questions);
+        }
       }
     },
   });
 
-  // When content prop changes (e.g., after clear all), update the editor
+  // Helper function to extract questions from TipTap content
+  const extractQuestionsFromContent = (content: any): any[] => {
+    const questions: any[] = [];
+
+    const traverse = (node: any) => {
+      if (
+        node.type &&
+        [
+          "mcq",
+          "short_answer",
+          "map_diagram",
+          "matching",
+        ].includes(node.type)
+      ) {
+        // Convert TipTap node to database-compatible question format
+        const dbTypeMap: { [key: string]: string } = {
+          "mcq": "multiple_choice",
+          "short_answer": "short_answer",
+          "matching": "matching",
+          "map_diagram": "map_diagram"
+        };
+
+        const dbType = dbTypeMap[node.type] || "short_answer";
+
+        let question: any = {
+          id: `${dbType}_${node.attrs?.question_number || questions.length + 1}`,
+          type: dbType,
+          text: node.attrs?.question_text || node.attrs?.text || "",
+          points: 1,
+          position: node.attrs?.question_number || questions.length + 1,
+        };
+
+        if (node.type === "mcq") {
+          question.options = node.attrs?.options || [];
+          question.correctAnswer = node.attrs?.correctIndex || 0;
+        } else if (node.type === "short_answer") {
+          question.correctAnswer = node.attrs?.answers || [""];
+        } else if (node.type === "matching") {
+          question.correctAnswer = {
+            left: node.attrs?.left || [],
+            right: node.attrs?.right || [],
+          };
+        } else if (node.type === "map_diagram") {
+          question.correctAnswer = node.attrs?.boxes || [];
+          question.imageUrl = node.attrs?.imageUrl || "";
+          question.questionCount = node.attrs?.questionCount || 1;
+        }
+
+        questions.push(question);
+      }
+
+      if (node.content) {
+        node.content.forEach(traverse);
+      }
+    };
+
+    if (content && content.content) {
+      content.content.forEach(traverse);
+    }
+
+    return questions;
+  };
+
+  // Only update editor content on initial load or when explicitly cleared
   useEffect(() => {
-    if (editor && content !== undefined) {
-      // Handle both string and object content
+    console.log("🔍 Content sync useEffect:", {
+      hasEditor: !!editor,
+      contentType: typeof content,
+      editorContentLength: editor?.getJSON()?.content?.length || 0,
+      shouldUpdate: editor && content !== undefined && !editor.getJSON().content?.length
+    });
+    
+    if (editor && content !== undefined && !editor.getJSON().content?.length) {
+      // Only set content if editor is empty and we have initial content
+      console.log("🔍 Setting editor content from parent:", content);
       if (typeof content === 'string') {
-        // If it's a string, try to parse it as JSON first
         try {
           const parsedContent = JSON.parse(content);
-          if (JSON.stringify(parsedContent) !== JSON.stringify(editor.getJSON())) {
-            editor.commands.setContent(parsedContent);
-          }
+          editor.commands.setContent(parsedContent);
         } catch {
-          // If it's not valid JSON, treat it as plain text
-          if (content !== editor.getHTML()) {
-            editor.commands.setContent(content);
-          }
-        }
-      } else if (typeof content === 'object' && content !== null) {
-        // If it's an object, set it directly
-        if (JSON.stringify(content) !== JSON.stringify(editor.getJSON())) {
           editor.commands.setContent(content);
         }
+      } else if (typeof content === 'object' && content !== null) {
+        editor.commands.setContent(content);
       }
     }
   }, [content, editor]);
@@ -190,6 +270,10 @@ export function UnifiedTestEditor(
     setMapImageFiles([]);
     setMapAnswers([""]);
     setMapBoxes([]);
+    // Reset TFNG state
+    setTfngQuestion("");
+    setTfngCorrectOption(0);
+    setOptionError(""); // Clear error on reset
   };
 
   // Calculate the next question number based on existing questions
@@ -287,8 +371,14 @@ export function UnifiedTestEditor(
   const insertQuestion = () => {
     let questionContent: any = {};
     let summary = "";
+    setOptionError(""); // Clear error on each attempt
 
     console.log("🔍 Inserting question type:", currentQuestionType);
+    console.log("🔍 Current editor state:", {
+      hasEditor: !!editor,
+      editorContent: editor?.getJSON(),
+      currentQuestionType
+    });
 
     switch (currentQuestionType) {
       case "short_answer": {
@@ -323,6 +413,13 @@ export function UnifiedTestEditor(
           });
           
           // Insert custom node WITH correct answer(s)
+          console.log("🔍 About to insert short_answer node:", {
+            id,
+            question_number,
+            placeholder: `Answer ${question_number}`,
+            answers: [answer]
+          });
+          
           editor.chain().focus().insertContent({
             type: 'short_answer',
             attrs: {
@@ -332,6 +429,20 @@ export function UnifiedTestEditor(
               answers: [answer], // <--- THIS IS THE FIX!
             },
           }).run();
+          
+          console.log("🔍 Short answer node inserted. New editor content:", editor?.getJSON());
+          
+          // Force content update to parent
+          setTimeout(() => {
+            if (onContentChange) {
+              const updatedContent = editor.getJSON();
+              console.log("🔍 Force updating parent with content:", {
+                nodeTypes: updatedContent?.content?.map((n: any) => n.type) || [],
+                hasShortAnswerNodes: JSON.stringify(updatedContent).includes('"type":"short_answer"')
+              });
+              onContentChange(updatedContent);
+            }
+          }, 100);
         });
         // Add all new questions to the questions array
         const newQuestions = answers.map((answer, index) => ({
@@ -360,6 +471,10 @@ export function UnifiedTestEditor(
       case "multiple_choice": {
         if (!mcqQuestion.trim() || mcqOptions.filter((opt) => opt.trim()).length < 2) return;
         const validOptions = mcqOptions.filter((opt) => opt.trim());
+        if (correctOption < 0 || correctOption >= validOptions.length) {
+          setOptionError("Please select the correct answer.");
+          return;
+        }
         const id = `mcq_${Date.now()}`;
         const nextQuestionNumber = getNextQuestionNumber();
         
@@ -372,6 +487,14 @@ export function UnifiedTestEditor(
         });
         
         // Insert custom node
+        console.log("🔍 About to insert MCQ node:", {
+          id,
+          question_number: nextQuestionNumber,
+          question_text: mcqQuestion,
+          options: validOptions,
+          correctOption
+        });
+        
         editor.chain().focus().insertContent({
           type: 'mcq',
           attrs: {
@@ -382,6 +505,18 @@ export function UnifiedTestEditor(
             correct_index: correctOption,
           },
         }).run();
+        
+        // Force content update to parent
+        setTimeout(() => {
+          if (onContentChange) {
+            const updatedContent = editor.getJSON();
+            console.log("🔍 Force updating parent with MCQ content:", {
+              nodeTypes: updatedContent?.content?.map((n: any) => n.type) || [],
+              hasMCQNodes: JSON.stringify(updatedContent).includes('"type":"mcq"')
+            });
+            onContentChange(updatedContent);
+          }
+        }, 100);
         // Add to questions array
         const newQuestion = {
           id,
@@ -425,6 +560,13 @@ export function UnifiedTestEditor(
         });
         
         // Insert single custom node with all pairs
+        console.log("🔍 About to insert matching node:", {
+          id,
+          question_number: nextQuestionNumber,
+          left,
+          right
+        });
+        
         editor.chain().focus().insertContent({
           type: 'matching',
           attrs: {
@@ -434,6 +576,20 @@ export function UnifiedTestEditor(
             right,
           },
         }).run();
+        
+        console.log("🔍 Matching node inserted. New editor content:", editor?.getJSON());
+        
+        // Force content update to parent
+        setTimeout(() => {
+          if (onContentChange) {
+            const updatedContent = editor.getJSON();
+            console.log("🔍 Force updating parent with matching content:", {
+              nodeTypes: updatedContent?.content?.map((n: any) => n.type) || [],
+              hasMatchingNodes: JSON.stringify(updatedContent).includes('"type":"matching"')
+            });
+            onContentChange(updatedContent);
+          }
+        }, 100);
         
         // Add single question to questions array
         const newQuestion = {
@@ -481,7 +637,9 @@ export function UnifiedTestEditor(
             imageUrl: mapImageFiles[0].url,
             boxes: mapBoxes,
           },
-        }).run();
+                  }).run();
+        
+        console.log("🔍 MCQ node inserted. New editor content:", editor?.getJSON());
         
         // Add single question to questions array
         const newQuestion = {
@@ -502,6 +660,62 @@ export function UnifiedTestEditor(
         if (onQuestionsChange) onQuestionsChange(updatedQuestions);
         if (onEditorQuestionsChange) onEditorQuestionsChange(updatedQuestions);
         setQuestionCounter((prev) => prev + mapBoxes.length);
+        setShowModal(false);
+        setCurrentQuestionType(null);
+        resetForms();
+        return;
+      }
+      case "tfng": {
+        if (!tfngQuestion.trim()) return;
+        const id = `mcq_${Date.now()}`; // Use mcq prefix since it's treated as MCQ
+        const nextQuestionNumber = getNextQuestionNumber();
+        const tfngOptions = ["TRUE", "FALSE", "NOT GIVEN"];
+        
+        if (tfngCorrectOption < 0 || tfngCorrectOption > 2) {
+          setOptionError("Please select a correct answer");
+          return;
+        }
+        
+        console.log("🔍 TFNG Debug:", {
+          question: tfngQuestion,
+          options: tfngOptions,
+          correctOption: tfngCorrectOption,
+          correctAnswer: tfngOptions[tfngCorrectOption],
+          questionNumber: nextQuestionNumber
+        });
+        
+        // Insert custom node as MCQ
+        editor.chain().focus().insertContent({
+          type: 'mcq',
+          attrs: {
+            id,
+            question_number: nextQuestionNumber,
+            question_text: tfngQuestion,
+            options: tfngOptions,
+            correct_index: tfngCorrectOption,
+          },
+        }).run();
+        
+        // Add to questions array as MCQ type
+        const newQuestion = {
+          id,
+          type: "multiple_choice" as const, // Treat as MCQ
+          content: {
+            question: tfngQuestion,
+            options: tfngOptions,
+            correctAnswer: tfngCorrectOption,
+            question_number: nextQuestionNumber,
+          },
+          summary: `TFNG ${nextQuestionNumber}: ${tfngQuestion.slice(0, 30)}${tfngQuestion.length > 30 ? "..." : ""}`,
+        } as Question;
+        
+        console.log("🔍 TFNG Question Array:", newQuestion);
+        
+        const updatedQuestions = [...questions, newQuestion];
+        setQuestions(updatedQuestions);
+        if (onQuestionsChange) onQuestionsChange(updatedQuestions);
+        if (onEditorQuestionsChange) onEditorQuestionsChange(updatedQuestions);
+        setQuestionCounter((prev) => prev + 1);
         setShowModal(false);
         setCurrentQuestionType(null);
         resetForms();
@@ -624,6 +838,12 @@ export function UnifiedTestEditor(
   const handleInsertMatching = () => {
     openQuestionModal("matching");
   };
+  // Add TFNG Insertion Handler
+  const handleInsertTFNG = () => {
+    setTfngQuestion("");
+    setTfngCorrectOption(0);
+    openQuestionModal("tfng");
+  };
 
   return (
     <div className="w-full max-w-full mx-auto">
@@ -679,6 +899,15 @@ export function UnifiedTestEditor(
                   >
                     <MousePointer className="h-4 w-4" />
                     Matching
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleInsertTFNG}
+                    className="flex items-center gap-2"
+                  >
+                    <List className="h-4 w-4" />
+                    TFNG
                   </Button>
 
                   <Button
@@ -763,6 +992,9 @@ export function UnifiedTestEditor(
                           displayNumber = questionsInThisItem === 1 
                             ? `Q${question.content.question_number}` 
                             : `Q${question.content.question_number}-${question.content.question_number + questionsInThisItem - 1}`;
+                        } else if (question.type === "multiple_choice") {
+                          questionsInThisItem = 1; // Multiple choice is a single question
+                          displayNumber = `Q${question.content.question_number || currentQuestionNumber}`;
                         } else {
                           displayNumber = `Q${question.content.question_number || currentQuestionNumber}`;
                         }
@@ -918,6 +1150,9 @@ export function UnifiedTestEditor(
                     </Button>
                   )}
                 </div>
+                {optionError && (
+                  <div className="text-red-500 text-sm mt-2">{optionError}</div>
+                )}
               </div>
             )}
 
@@ -1098,6 +1333,38 @@ export function UnifiedTestEditor(
               </div>
             )}
 
+            {/* TFNG */}
+            {currentQuestionType === "tfng" && (
+              <div className="space-y-4">
+                <div>
+                  <Label>Question Text</Label>
+                  <Input
+                    placeholder="Enter the statement for TFNG"
+                    value={tfngQuestion}
+                    onChange={(e) => setTfngQuestion(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label>Options</Label>
+                  {["TRUE", "FALSE", "NOT GIVEN"].map((option, index) => (
+                    <div key={option} className="flex items-center space-x-2 mt-2">
+                      <input
+                        type="radio"
+                        name="tfng-correct"
+                        checked={tfngCorrectOption === index}
+                        onChange={() => setTfngCorrectOption(index)}
+                        className="mt-0.5"
+                      />
+                      <Input value={option} readOnly className="flex-1 bg-gray-100" />
+                    </div>
+                  ))}
+                </div>
+                {optionError && (
+                  <div className="text-red-500 text-sm mt-2">{optionError}</div>
+                )}
+              </div>
+            )}
+
             <div className="flex justify-end space-x-4">
               <Button variant="outline" onClick={() => setShowModal(false)}>
                 Cancel
@@ -1111,4 +1378,4 @@ export function UnifiedTestEditor(
   );
 }
 
-export default UnifiedTestEditor;
+export default ReadingTestEditor;

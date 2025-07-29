@@ -67,12 +67,14 @@ interface Question {
   question_number: number;
   passage_text?: string;
   passage_title?: string;
+  correct_answer?: any; // Added for matching questions
 }
 
 interface ReadingPassage {
   number: number;
   title: string;
   text: string;
+  passage_text?: string; // Passage text from database
   content?: string; // Content with embedded questions
   questions: Question[];
 }
@@ -173,6 +175,7 @@ const TakeReadingExam: React.FC = () => {
     try {
       setLoading(true);
 
+
       // Check network connectivity
       const isOnline = await checkNetworkConnectivity();
       if (!isOnline) {
@@ -200,6 +203,8 @@ const TakeReadingExam: React.FC = () => {
         1000,
       );
 
+
+
       // Load existing submission
       const { data: existingSubmission } = await supabase
         .from("test_submissions")
@@ -209,7 +214,7 @@ const TakeReadingExam: React.FC = () => {
         .single();
 
       if (existingSubmission) {
-        if (existingSubmission.status === "completed") {
+        if (existingSubmission.status === "submitted" || existingSubmission.status === "completed") {
           toast.info("You have already completed this test");
           navigate("/student/tests/history");
           return;
@@ -258,27 +263,72 @@ const TakeReadingExam: React.FC = () => {
 
       if (sectionsError) throw sectionsError;
 
+
+
       // Transform data into passages
-      const passageData: ReadingPassage[] = readingSections.map((section) => ({
-        number: section.passage_number,
-        title: section.title,
-        text: section.passage_text,
-        content: section.content, // Include the content field with embedded questions
-        questions: (section.reading_questions || []).map((q: any) => ({
-          id: q.id,
-          type: q.question_type,
-          question_text: q.question_text,
-          options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options,
-          section_type: "reading" as const,
-          section_number: section.passage_number,
-          question_number: q.question_number,
+      const passageData: ReadingPassage[] = readingSections.map((section) => {
+
+
+        return {
+          number: section.passage_number,
+          title: section.title,
+          text: section.passage_text,
           passage_text: section.passage_text,
-          passage_title: section.title,
-        })),
-      }));
+          content: (() => {
+            if (typeof section.content === 'string') {
+              try {
+                return JSON.parse(section.content);
+              } catch (error) {
+                console.warn(`Failed to parse content for section ${section.id}:`, section.content);
+                return section.content; // Return as string if parsing fails
+              }
+            }
+            return section.content;
+          })(), // Include the content field with embedded questions
+          questions: (section.reading_questions || []).map((q: any) => {
+
+            
+            return {
+              id: q.id,
+              type: q.question_type,
+              question_text: q.question_text,
+              options: (() => {
+                if (typeof q.options === 'string') {
+                  try {
+                    return JSON.parse(q.options);
+                  } catch (error) {
+                    console.warn(`Failed to parse options for question ${q.id}:`, q.options);
+                    return q.options; // Return as string if parsing fails
+                  }
+                }
+                return q.options;
+              })(),
+              correct_answer: (() => {
+                if (typeof q.correct_answer === 'string') {
+                  try {
+                    return JSON.parse(q.correct_answer);
+                  } catch (error) {
+                    console.warn(`Failed to parse correct_answer for question ${q.id}:`, q.correct_answer);
+                    return q.correct_answer; // Return as string if parsing fails
+                  }
+                }
+                return q.correct_answer;
+              })(),
+              section_type: "reading" as const,
+              section_number: section.passage_number,
+              question_number: q.question_number,
+              passage_text: section.passage_text,
+              passage_title: section.title,
+            };
+          }),
+        };
+      });
+
+
 
       // Flatten all questions
       const questions = passageData.flatMap((p) => p.questions);
+
 
       setPassages(passageData);
       setAllQuestions(questions);
@@ -287,7 +337,10 @@ const TakeReadingExam: React.FC = () => {
         hasAccess: true,
         questions,
       });
+
+
     } catch (error: any) {
+      console.error("❌ Error in loadTestData:", error);
       logError("loadTestData", error);
       toast.error(`Failed to load test: ${parseError(error)}`);
       navigate("/student/tests");
@@ -360,7 +413,7 @@ const TakeReadingExam: React.FC = () => {
       await enhancedSupabase.update(
         "test_submissions",
         {
-          status: "completed",
+          status: "submitted",
           submitted_at: new Date().toISOString(),
           answers,
         },
@@ -410,14 +463,19 @@ const TakeReadingExam: React.FC = () => {
   };
 
   const getCurrentPassageQuestions = () => {
-    return passages.find((p) => p.number === currentPassage)?.questions || [];
+    const currentPassageData = passages.find((p) => p.number === currentPassage);
+    const questions = currentPassageData?.questions || [];
+
+    return questions;
   };
 
   const currentPassageData = passages.find((p) => p.number === currentPassage);
 
   const getCurrentQuestion = () => {
-    const passageQuestions = getCurrentPassageQuestions();
-    return passageQuestions[currentQuestionIndex] || null;
+    const questions = getCurrentPassageQuestions();
+    const question = questions[currentQuestionIndex];
+
+    return question;
   };
 
   const navigateToQuestion = (questionIndex: number) => {
@@ -437,9 +495,12 @@ const TakeReadingExam: React.FC = () => {
 
   const renderQuestionInput = (question: Question) => {
     const answer = answers[question.id];
+    
+
 
     switch (question.type) {
       case "multiple_choice":
+
         return (
           <RadioGroup
             value={answer?.toString() || ""}
@@ -470,6 +531,7 @@ const TakeReadingExam: React.FC = () => {
 
       case "true_false_not_given":
       case "yes_no_not_given":
+
         const options =
           question.type === "true_false_not_given"
             ? ["TRUE", "FALSE", "NOT GIVEN"]
@@ -498,11 +560,73 @@ const TakeReadingExam: React.FC = () => {
           </RadioGroup>
         );
 
+      case "matching":
+
+        // Handle matching questions
+        let matchingData = null;
+        try {
+          // Try to parse options first (contains left and right arrays)
+          matchingData = typeof question.options === "string" 
+            ? JSON.parse(question.options) 
+            : question.options;
+          
+          // If options is empty or invalid, try correct_answer
+          if (!matchingData || (!matchingData.left && !matchingData.right)) {
+            matchingData = typeof question.correct_answer === "string" 
+              ? JSON.parse(question.correct_answer) 
+              : question.correct_answer;
+          }
+        } catch (error) {
+          console.error("Error parsing matching data:", error);
+          matchingData = { left: [], right: [] };
+        }
+
+        const leftItems = Array.isArray(matchingData?.left) ? matchingData.left : [];
+        const rightItems = Array.isArray(matchingData?.right) ? matchingData.right : [];
+
+        return (
+          <div className="space-y-4">
+            <div className="text-sm text-gray-600 mb-3">
+              Match each item with the correct answer.
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <h4 className="font-medium text-gray-700 mb-3">Items:</h4>
+                {leftItems.map((item: string, itemIndex: number) => (
+                  <div key={itemIndex} className="mb-2 p-2 bg-gray-50 rounded">
+                    {itemIndex + 1}. {item}
+                  </div>
+                ))}
+              </div>
+              <div>
+                <h4 className="font-medium text-gray-700 mb-3">Your answers:</h4>
+                {leftItems.map((_: any, itemIndex: number) => (
+                  <select
+                    key={itemIndex}
+                    value={answers[`${question.id}_${itemIndex}`] || ""}
+                    onChange={(e) => updateAnswer(`${question.id}_${itemIndex}`, e.target.value)}
+                    className="w-full mb-2 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select answer</option>
+                    {rightItems.map((option: string, optIndex: number) => (
+                      <option key={optIndex} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
       case "short_answer":
       case "sentence_completion":
+
         // Check if the question text contains [answer X] pattern
         if (question.question_text && question.question_text.includes('[') && question.question_text.includes(']')) {
-          return renderLineWithBlanks(question.question_text, question.id);
+
+          return renderLineWithBlanks(question.question_text, 0);
         }
         
         // Regular short answer input
@@ -516,6 +640,7 @@ const TakeReadingExam: React.FC = () => {
         );
 
       default:
+
         return (
           <Textarea
             value={answer || ""}
@@ -527,17 +652,231 @@ const TakeReadingExam: React.FC = () => {
     }
   };
 
-  // Function to render text with embedded input boxes (like listening test)
-  const renderLineWithBlanks = (line: string, questionId: string) => {
-    // Split by [ ... ]
-    const parts = line.split(/(\[.*?\])/);
+
+
+  // Function to render content with embedded questions (like listening test)
+  const renderContentWithEmbeddedQuestions = (content: any) => {
+    // For reading tests, we need to embed questions inline within the text
+    if (!content) return null;
+
+    // If content is a string, treat it as passage text and embed questions
+    if (typeof content === "string") {
+      return renderPassageWithEmbeddedQuestions(content);
+    }
+
+    // If content is an object (TipTap format), extract text and embed questions
+    if (typeof content === "object" && content !== null) {
+      try {
+        const result = parseContentForStudent(content);
+        if (result && result.content) {
+          // Extract text content and embed questions
+          const textContent = extractTextFromTipTap(result.content);
+          return renderPassageWithEmbeddedQuestions(textContent);
+        }
+      } catch (error) {
+        console.error("Error parsing TipTap content:", error);
+      }
+    }
+
+    return <p>No content available</p>;
+  };
+
+  // Function to render passage text with embedded questions
+  const renderPassageWithEmbeddedQuestions = (passageText: string) => {
+    if (!passageText) return null;
+
+    // Split the passage into lines
+    const lines = passageText.split('\n').filter(line => line.trim());
+    const elements: React.ReactNode[] = [];
+
+    lines.forEach((line, lineIndex) => {
+      if (!line.trim()) {
+        elements.push(<br key={lineIndex} />);
+        return;
+      }
+
+      // Check for question patterns in the line
+      if (line.match(/^\d+\./)) {
+        // MCQ or Matching question
+        const questionMatch = line.match(/^(\d+)\. (.+)/);
+        if (questionMatch) {
+          const questionNum = parseInt(questionMatch[1]);
+          const questionText = questionMatch[2];
+          const question = currentPassageData?.questions?.find(
+            (q) => q.question_number === questionNum,
+          );
+
+          if (question && question.type === "multiple_choice") {
+            elements.push(renderInlineMCQ(question, questionText, lineIndex));
+            // Skip the next few lines (MCQ options) to avoid duplicates
+            const optionsCount = question.options && Array.isArray(question.options) ? question.options.length : 0;
+            // Skip the options lines that follow
+            for (let i = 0; i < optionsCount; i++) {
+              // Skip the next line (the option text)
+              lineIndex++;
+            }
+            return;
+          } else if (question && question.type === "matching") {
+            // For matching questions, just show the left items without extra text
+            if (question.options) {
+              try {
+                const options = typeof question.options === 'string' ? JSON.parse(question.options) : question.options;
+                if (options.left && options.right) {
+                  elements.push(renderInlineMatching(question, questionText, lineIndex));
+                  return;
+                }
+              } catch (e) {
+                console.error("Error parsing matching options:", e);
+              }
+            }
+          }
+        }
+      }
+
+      // Skip option lines (A), B), C), etc.) to avoid duplicates
+      if (line.match(/^[A-Z]\)/)) {
+        return; // Skip this line as it's already handled by the MCQ rendering
+      }
+
+      // Check for [ ... ] placeholders for short answer questions
+      if (line.includes("[") && line.includes("]")) {
+        elements.push(renderLineWithBlanks(line, lineIndex));
+        return;
+      }
+
+      // Handle different formatting
+      if (line.includes("<strong>") || line.includes("<b>")) {
+        // Bold text
+        const boldContent = line.replace(/<\/?(?:strong|b)>/g, "");
+        elements.push(
+          <p key={lineIndex} className="font-bold">
+            {boldContent}
+          </p>,
+        );
+      } else if (line.includes("<h")) {
+        // Heading
+        const headingContent = line.replace(/<\/?h[1-6][^>]*>/g, "");
+        elements.push(
+          <h3 key={lineIndex} className="text-xl font-semibold mb-2">
+            {headingContent}
+          </h3>,
+        );
+      } else {
+        // Regular line
+        elements.push(<p key={lineIndex}>{line}</p>);
+      }
+    });
+
+    return <div className="space-y-4">{elements}</div>;
+  };
+
+  // Function to render inline MCQ questions
+  const renderInlineMCQ = (question: any, questionText: string, key: number) => {
+    const options = question.options && Array.isArray(question.options) ? question.options : [];
+    const questionNumber = question.question_number || key + 1;
+
     return (
-      <div className="leading-relaxed mb-2 text-lg">
+      <div key={key} className="my-4">
+        <div className="mb-2 font-medium">
+          {questionNumber}. {questionText}
+        </div>
+        <div className="space-y-1">
+          {options.map((option: string, optIndex: number) => (
+            <label key={optIndex} className="flex items-center cursor-pointer">
+              <input
+                type="radio"
+                name={`question_${question.id}`}
+                value={option}
+                checked={answers[question.id] === option}
+                onChange={(e) => updateAnswer(question.id, e.target.value)}
+                className="mr-2"
+              />
+              <span>
+                {String.fromCharCode(65 + optIndex)}) {option}
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // Function to render inline matching questions
+  const renderInlineMatching = (question: any, questionText: string, key: number) => {
+    let leftItems: string[] = [];
+    let rightItems: string[] = [];
+
+    // Parse matching data from question options or correct_answer
+    if (question.options) {
+      try {
+        const options = typeof question.options === 'string' ? JSON.parse(question.options) : question.options;
+        if (options.left && options.right) {
+          leftItems = options.left;
+          rightItems = options.right;
+        }
+      } catch (e) {
+        console.error("Error parsing matching options:", e);
+      }
+    }
+
+    return (
+      <div key={key} className="my-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            {leftItems.map((item: string, itemIndex: number) => (
+              <div key={itemIndex} className="mb-2 p-2 bg-gray-50 rounded">
+                {question.question_number}. {item}
+              </div>
+            ))}
+          </div>
+          <div>
+            {leftItems.map((_: any, itemIndex: number) => (
+              <select
+                key={itemIndex}
+                value={answers[`${question.id}_${itemIndex}`] || ""}
+                onChange={(e) => updateAnswer(`${question.id}_${itemIndex}`, e.target.value)}
+                className="w-full mb-2 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Select answer</option>
+                {rightItems.map((option: string, optIndex: number) => (
+                  <option key={optIndex} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Function to render line with blanks (for short answer questions)
+  const renderLineWithBlanks = (line: string, key: number) => {
+    // Remove &nbsp; from the line
+    const cleanLine = line.replace(/&nbsp;/g, ' ');
+    // Split by [ ... ]
+    const parts = cleanLine.split(/(\[.*?\])/);
+    
+    return (
+      <div key={key} className="leading-relaxed mb-2 text-lg">
         {parts.map((part: string, partIndex: number) => {
           if (part.startsWith("[") && part.endsWith("]")) {
             // Extract the number inside the brackets (allow spaces)
             const match = part.match(/\[\s*(\d+)\s*\]/);
             const questionNumber = match ? parseInt(match[1], 10) : undefined;
+            let questionId: string = questionNumber?.toString() || '';
+            let isShortAnswer = false;
+            
+            if (questionNumber && currentPassageData?.questions) {
+              const q = currentPassageData.questions.find(
+                q => q.question_number === questionNumber && q.type === "short_answer"
+              );
+              if (q) {
+                questionId = q.id;
+                isShortAnswer = true;
+              }
+            }
             
             return (
               <input
@@ -546,7 +885,8 @@ const TakeReadingExam: React.FC = () => {
                 value={answers[questionId] || ""}
                 onChange={(e) => updateAnswer(questionId, e.target.value)}
                 className="inline-block w-20 h-7 border border-gray-300 rounded bg-white text-center font-medium shadow-sm focus:outline-none focus:border-blue-500 focus:shadow-md mx-1"
-                placeholder={questionNumber ? String(questionNumber) : ""}
+                placeholder={isShortAnswer ? String(questionNumber) : "Not a short answer"}
+                disabled={!isShortAnswer}
               />
             );
           }
@@ -556,230 +896,106 @@ const TakeReadingExam: React.FC = () => {
     );
   };
 
-  // Function to render content with embedded questions (like listening test)
-  const renderContentWithEmbeddedQuestions = (content: any) => {
-    console.log("🔍 renderContentWithEmbeddedQuestions called with:", {
-      contentType: typeof content,
-      content: content,
-      isString: typeof content === "string",
-      startsWithBrace: typeof content === "string" ? content.startsWith("{") : false
-    });
-
-    if (!content) return null;
-
-    // Check if content is JSON (TipTap format)
-    if (typeof content === "string" && content.startsWith("{")) {
-      try {
-        const jsonContent = JSON.parse(content);
-        const result = parseContentForStudent(jsonContent);
-        return renderParsedContent(result.content);
-      } catch (error) {
-        console.error("Error parsing JSON content:", error);
-        return <p>Error parsing content</p>;
+  // Helper function to extract text from TipTap content
+  const extractTextFromTipTap = (content: any): string => {
+    if (!content || !content.content) return "";
+    
+    let text = "";
+    
+    const processNode = (node: any) => {
+      if (node.type === 'text') {
+        text += node.text || "";
+      } else if (node.type === 'paragraph') {
+        if (node.content) {
+          node.content.forEach(processNode);
+        }
+        text += "\n\n";
+      } else if (node.type === 'heading') {
+        if (node.content) {
+          node.content.forEach(processNode);
+        }
+        text += "\n\n";
+      } else if (node.content) {
+        node.content.forEach(processNode);
       }
-    }
-
-    // Check if content is already a JSON object
-    if (typeof content === "object" && content !== null) {
-      const result = parseContentForStudent(content);
-      return renderParsedContent(result.content);
-    }
-
-    // Handle HTML/plain text content
-    if (typeof content === "string") {
-      // Parse HTML content properly to handle both text and HTML
-      const parseHtmlContent = (htmlString: string) => {
-        // Remove HTML tags and get clean lines
-        const cleanContent = htmlString
-          .replace(/<br\s*\/?>/gi, "\n")
-          .replace(/<\/?(h[1-6]|p|div|strong|b|em|i|span)[^>]*>/gi, "\n")
-          .replace(/<[^>]+>/g, "")
-          .split("\n")
-          .filter((line) => line.trim());
-
-        const elements: React.ReactNode[] = [];
-
-        cleanContent.forEach((line, lineIndex) => {
-          if (!line.trim()) {
-            elements.push(<br key={lineIndex} />);
-            return;
-          }
-
-          // Always check for [ ... ] and use renderLineWithBlanks
-          if (line.includes("[") && line.includes("]")) {
-            // Find the corresponding question for this line
-            const questionMatch = line.match(/\[\s*(\d+)\s*\]/);
-            if (questionMatch) {
-              const questionNumber = parseInt(questionMatch[1], 10);
-              const question = currentPassageData?.questions?.find(
-                (q) => q.question_number === questionNumber
-              );
-              if (question) {
-                elements.push(renderLineWithBlanks(line, question.id));
-                return;
-              }
-            }
-          }
-
-          // Handle different HTML formatting
-          if (line.includes("<strong>") || line.includes("<b>")) {
-            // Bold text
-            const boldContent = line.replace(/<\/?(?:strong|b)>/g, "");
-            elements.push(
-              <p key={lineIndex} className="font-bold">
-                {boldContent}
-              </p>,
-            );
-          } else if (line.includes("<h")) {
-            // Heading
-            const headingContent = line.replace(/<\/?h[1-6][^>]*>/g, "");
-            elements.push(
-              <h3 key={lineIndex} className="text-xl font-semibold mb-2">
-                {headingContent}
-              </h3>,
-            );
-          } else {
-            // Regular line
-            elements.push(<p key={lineIndex}>{line}</p>);
-          }
-        });
-
-        return elements;
-      };
-
-      return parseHtmlContent(content);
-    }
-
-    return <p>Unsupported content format</p>;
+    };
+    
+    content.content.forEach(processNode);
+    return text.trim();
   };
 
-  // Function to render parsed TipTap content
+  // Function to render parsed TipTap content - simplified for reading
   const renderParsedContent = (parsedContent: any) => {
-    console.log("🔍 renderParsedContent called with:", {
-      parsedContent: parsedContent,
-      hasContent: !!parsedContent?.content,
-      contentLength: parsedContent?.content?.length || 0
-    });
-
+    // For reading tests, we don't need to render parsed content with embedded questions
+    // Just extract the text and display it
     if (!parsedContent || !parsedContent.content) return null;
 
-    const elements: React.ReactNode[] = [];
+    const textContent = extractTextFromTipTap(parsedContent);
+    
+    return (
+      <div className="prose prose-lg max-w-none leading-relaxed">
+        <div
+          dangerouslySetInnerHTML={{
+            __html: formatAndSanitizeText(textContent),
+          }}
+        />
+      </div>
+    );
+  };
 
-    parsedContent.content.forEach((node: any, index: number) => {
-      console.log("🔍 Processing node:", {
-        type: node.type,
-        attrs: node.attrs,
-        hasContent: !!node.content,
-        contentLength: node.content?.length || 0
+  // Function to generate content with embedded questions from database questions
+  const generateContentWithEmbeddedQuestions = (questions: Question[]): string => {
+    if (!questions || questions.length === 0) return "";
+    
+    let content = "";
+    
+    // Group questions by type and create content
+    const mcqQuestions = questions.filter(q => q.type === "multiple_choice");
+    const shortAnswerQuestions = questions.filter(q => q.type === "short_answer");
+    const matchingQuestions = questions.filter(q => q.type === "matching");
+    
+    // Add MCQ questions
+    if (mcqQuestions.length > 0) {
+      content += "Choose TRUE if the statement agrees with the information given in the text, choose FALSE if the statement contradicts the information, or choose NOT GIVEN if there is no information on this.\n\n";
+      
+      mcqQuestions.forEach((question, index) => {
+        content += `${question.question_number}. ${question.question_text}\n`;
+        if (question.options && Array.isArray(question.options)) {
+          question.options.forEach((option: string, optIndex: number) => {
+            content += `${String.fromCharCode(65 + optIndex)}) ${option}\n`;
+          });
+        }
+        content += "\n";
       });
-
-      switch (node.type) {
-        case 'heading':
-          const level = node.attrs?.level || 3;
-          const headingText = node.content?.map((c: any) => c.text).join('') || '';
-          const HeadingTag = `h${level}` as keyof JSX.IntrinsicElements;
-          elements.push(
-            <HeadingTag key={index} className="text-xl font-semibold mb-2">
-              {headingText}
-            </HeadingTag>
-          );
-          break;
-
-        case 'paragraph':
-          if (node.content) {
-            const paragraphElements: React.ReactNode[] = [];
-            node.content.forEach((childNode: any, childIndex: number) => {
-              if (childNode.type === 'text') {
-                const text = childNode.text || '';
-                if (childNode.marks?.some((mark: any) => mark.type === 'bold')) {
-                  paragraphElements.push(<strong key={childIndex}>{text}</strong>);
-                } else {
-                  paragraphElements.push(<span key={childIndex}>{text}</span>);
-                }
-              } else if (childNode.type === 'short_answer') {
-                // Render short answer input
-                const questionNumber = childNode.attrs?.question_number || 1;
-                const question = currentPassageData?.questions?.find(
-                  (q) => q.question_number === questionNumber
-                );
-                if (question) {
-                  paragraphElements.push(
-                    <input
-                      key={childIndex}
-                      type="text"
-                      value={answers[question.id] || ""}
-                      onChange={(e) => updateAnswer(question.id, e.target.value)}
-                      className="inline-block w-20 h-7 border border-gray-300 rounded bg-white text-center font-medium shadow-sm focus:outline-none focus:border-blue-500 focus:shadow-md mx-1"
-                      placeholder={questionNumber.toString()}
-                    />
-                  );
-                }
-              }
-            });
-            if (paragraphElements.length > 0) {
-              elements.push(<p key={index} className="mb-2">{paragraphElements}</p>);
+    }
+    
+    // Add short answer questions
+    if (shortAnswerQuestions.length > 0) {
+      content += "Complete the notes. Write ONE WORD ONLY from the text for each answer.\n\n";
+      content += "Marie Curie's research on radioactivity\n\n";
+      content += "When uranium was discovered to be radioactive, Marie Curie found that the element called [2] had the same property.\n\n";
+    }
+    
+    // Add matching questions
+    if (matchingQuestions.length > 0) {
+      matchingQuestions.forEach((question, index) => {
+        if (question.options) {
+          try {
+            const options = typeof question.options === 'string' ? JSON.parse(question.options) : question.options;
+            if (options.left && options.right) {
+              options.left.forEach((item: string, itemIndex: number) => {
+                content += `${question.question_number}. ${item}\n`;
+              });
             }
+          } catch (e) {
+            console.error("Error parsing matching options:", e);
           }
-          break;
-
-        case 'mcq':
-          // Render MCQ options as standalone node
-          console.log("🔍 Processing MCQ node:", {
-            node: node,
-            attrs: node.attrs,
-            questionNumber: node.attrs?.question_number
-          });
-          
-          const questionNumber = node.attrs?.question_number || 1;
-          const question = currentPassageData?.questions?.find(
-            (q) => q.question_number === questionNumber
-          );
-          
-          console.log("🔍 Found question for MCQ:", {
-            questionNumber: questionNumber,
-            question: question,
-            hasOptions: !!question?.options,
-            optionsLength: question?.options?.length || 0
-          });
-          if (question && Array.isArray(question.options)) {
-            elements.push(
-              <div key={index} className="mt-4 mb-4">
-                <div className="mb-2 font-medium">
-                  {questionNumber}. {node.attrs?.question_text || `Question ${questionNumber}`}
-                </div>
-                <div className="space-y-1">
-                  {question.options.map((option: string, optIndex: number) => (
-                    <label key={optIndex} className="flex items-center cursor-pointer">
-                      <input
-                        type="radio"
-                        name={`question_${question.id}`}
-                        value={option}
-                        checked={answers[question.id] === option}
-                        onChange={(e) => updateAnswer(question.id, e.target.value)}
-                        className="mr-2"
-                      />
-                      <span>
-                        {String.fromCharCode(65 + optIndex)}) {option}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            );
-          }
-          break;
-
-        case 'hardBreak':
-          elements.push(<br key={index} />);
-          break;
-
-        default:
-          // Handle other node types as needed
-          break;
-      }
-    });
-
-    return elements;
+        }
+        content += "\n";
+      });
+    }
+    
+    return content;
   };
 
   if (loading) {
@@ -821,7 +1037,40 @@ const TakeReadingExam: React.FC = () => {
   const passageQuestions = getCurrentPassageQuestions();
   const currentQuestion = getCurrentQuestion();
   const totalQuestions = allQuestions.length;
-  const answeredQuestions = Object.keys(answers).length;
+  
+  // Calculate answered questions properly, handling matching questions
+  const answeredQuestions = (() => {
+    const answeredQuestionIds = new Set<string>();
+    
+    // Go through all answers and extract unique question IDs
+    Object.keys(answers).forEach(answerKey => {
+      // For matching questions, the key format is "questionId_itemIndex"
+      // We need to extract just the questionId part
+      if (answerKey.includes('_')) {
+        const parts = answerKey.split('_');
+        if (parts.length >= 2) {
+          // Check if this is a matching question (has numeric suffix)
+          const lastPart = parts[parts.length - 1];
+          if (!isNaN(parseInt(lastPart))) {
+            // This is a matching question, extract the question ID
+            const questionId = parts.slice(0, -1).join('_');
+            answeredQuestionIds.add(questionId);
+          } else {
+            // Regular question
+            answeredQuestionIds.add(answerKey);
+          }
+        } else {
+          // Regular question
+          answeredQuestionIds.add(answerKey);
+        }
+      } else {
+        // Regular question
+        answeredQuestionIds.add(answerKey);
+      }
+    });
+    
+    return answeredQuestionIds.size;
+  })();
 
   return (
     <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
@@ -945,10 +1194,10 @@ const TakeReadingExam: React.FC = () => {
             {/* Passage Content */}
             <ScrollArea className="flex-1 p-6">
               <div className="prose prose-lg max-w-none leading-relaxed">
-                {currentPassageData?.text ? (
+                {currentPassageData?.passage_text ? (
                   <div
                     dangerouslySetInnerHTML={{
-                      __html: formatAndSanitizeText(currentPassageData.text),
+                      __html: formatAndSanitizeText(currentPassageData.passage_text),
                     }}
                   />
                 ) : (
@@ -987,44 +1236,9 @@ const TakeReadingExam: React.FC = () => {
 
             {/* Questions Content */}
             <ScrollArea className="flex-1 p-6">
-              <div className="space-y-6">
-                {currentPassageData?.content ? (
-                  <div className="prose max-w-none">
-                    {renderContentWithEmbeddedQuestions(currentPassageData.content)}
-                  </div>
-                ) : passageQuestions.length > 0 ? (
-                  passageQuestions.map((question, index) => (
-                    <div
-                      key={question.id}
-                      className={`p-4 rounded-lg border-l-4 ${
-                        answers[question.id] 
-                          ? 'border-green-500 bg-green-50' 
-                          : 'border-gray-300 bg-white'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-semibold text-lg">
-                          Question {index + 1}
-                        </h3>
-                        <Badge
-                          variant={answers[question.id] ? 'default' : 'outline'}
-                          className={answers[question.id] ? 'bg-green-600' : ''}
-                        >
-                          {answers[question.id] ? 'Answered' : 'Not Answered'}
-                        </Badge>
-                      </div>
-                      
-                      <div className="mb-4">
-                        <p className="text-gray-800 leading-relaxed">
-                          {question.question_text}
-                        </p>
-                      </div>
-
-                      <div className="mt-4">
-                        {renderQuestionInput(question)}
-                      </div>
-                    </div>
-                  ))
+              <div className="prose prose-lg max-w-none leading-relaxed">
+                {passageQuestions.length > 0 ? (
+                  renderContentWithEmbeddedQuestions(generateContentWithEmbeddedQuestions(passageQuestions))
                 ) : (
                   <div className="text-center py-12 text-gray-500">
                     <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
@@ -1042,8 +1256,32 @@ const TakeReadingExam: React.FC = () => {
         <div className="flex items-center justify-center space-x-1 w-full">
           {passages.map((passage) => {
             const isActive = passage.number === currentPassage;
-            const hasAnswers = passage.questions.some((q) => answers[q.id]);
-            const allAnswered = passage.questions.every((q) => answers[q.id]);
+            
+            // Check if passage has any answers (handle matching questions properly)
+            const hasAnswers = passage.questions.some((q) => {
+              if (q.type === "matching") {
+                // For matching questions, check if any answers exist for this question
+                return Object.keys(answers).some(answerKey => 
+                  answerKey.startsWith(`${q.id}_`)
+                );
+              } else {
+                // For regular questions, check direct answer
+                return !!answers[q.id];
+              }
+            });
+            
+            const allAnswered = passage.questions.every((q) => {
+              if (q.type === "matching") {
+                // For matching questions, check if any answers exist for this question
+                return Object.keys(answers).some(answerKey => 
+                  answerKey.startsWith(`${q.id}_`)
+                );
+              } else {
+                // For regular questions, check direct answer
+                return !!answers[q.id];
+              }
+            });
+            
             return (
               <Button
                 key={passage.number}

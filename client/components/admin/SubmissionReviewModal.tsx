@@ -427,7 +427,22 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
             <div>
               <span className="font-medium text-sm">Student Answer:</span>
               <p className="text-sm mt-1 p-2 bg-white rounded border">
-                {result.userAnswer || "No answer provided"}
+                {(() => {
+                  // Handle different question types for student answer display
+                  if (result.questionType === "matching") {
+                    // For matching questions, show the student's selected answer
+                    return result.userAnswer || "No answer provided";
+                  } else if (result.questionType === "short_answer") {
+                    // For short answers, show the student's text input
+                    return result.userAnswer || "No answer provided";
+                  } else if (result.questionType === "multiple_choice") {
+                    // For MCQ, show the selected option
+                    return result.userAnswer || "No answer provided";
+                  } else {
+                    // Default handling
+                    return result.userAnswer || "No answer provided";
+                  }
+                })()}
               </p>
             </div>
             <div>
@@ -438,14 +453,18 @@ const SubmissionReviewModal: React.FC<SubmissionReviewModalProps> = ({
                   if (result.questionType === "map_labeling") {
                     return result.correctAnswer || "No correct answer set";
                   } else if (result.questionType === "matching") {
+                    // For matching questions, show the correct answer directly
                     return result.correctAnswer || "No correct answer set";
                   } else if (result.questionType === "multiple_choice") {
                     return result.correctAnswer || "No correct answer set";
                   } else if (result.questionType === "short_answer") {
-                    // For short answers, the correctAnswer is already processed in autoGrading.ts
-                    // Just display it directly - no need to parse again
+                    // For short answers, display the correct answer directly
                     if (result.correctAnswer === null || result.correctAnswer === undefined) {
                       return "No correct answer set";
+                    }
+                    // If it's an array, take the first element, otherwise display as string
+                    if (Array.isArray(result.correctAnswer)) {
+                      return result.correctAnswer[0] || "No correct answer set";
                     }
                     return String(result.correctAnswer);
                   } else {
