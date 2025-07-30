@@ -26,7 +26,8 @@ interface Question {
   type:
     | "short_answer"
     | "multiple_choice"
-    | "matching";
+    | "matching"
+    | "multiple_selection";
   content: any;
   summary: string;
   attrs?: any; // Add attrs property for compatibility
@@ -355,6 +356,11 @@ const CreateReadingNew: React.FC = () => {
           typeof q.content?.correctAnswer !== 'undefined' ||
           typeof q.content?.correct_answer !== 'undefined' ||
           (Array.isArray(q.content?.answers) && q.content.answers.length > 0);
+      } else if (q.type === "multiple_selection") {
+        // For multiple selection questions, check if correctAnswers array exists and has content
+        hasCorrectAnswer = 
+          Array.isArray(q.content?.correctAnswers) && 
+          q.content.correctAnswers.length > 0;
       } else {
         // For other question types, check standard correct answer fields
         // Use typeof to check if the value exists (including 0)
@@ -449,7 +455,8 @@ const CreateReadingNew: React.FC = () => {
       const ALLOWED_TYPES = new Set([
         "multiple_choice",
         "short_answer",
-        "matching"
+        "matching",
+        "multiple_selection"
       ]);
 
       // Log all question types before filtering
@@ -466,8 +473,10 @@ const CreateReadingNew: React.FC = () => {
           dbQuestionType = "multiple_choice";
         } else if (question.type === "short_answer") {
           dbQuestionType = "short_answer";
-                } else if (question.type === "matching") {
+        } else if (question.type === "matching") {
           dbQuestionType = "matching";
+        } else if (question.type === "multiple_selection") {
+          dbQuestionType = "multiple_selection";
         }
 
         // Extract correct answer based on question type
@@ -498,6 +507,17 @@ const CreateReadingNew: React.FC = () => {
             } else {
               correctAnswer = JSON.stringify([question.content.correctAnswer]);
             }
+          } else if (question.content?.correct_answer) {
+            if (Array.isArray(question.content.correct_answer)) {
+              correctAnswer = JSON.stringify(question.content.correct_answer);
+            } else {
+              correctAnswer = JSON.stringify([question.content.correct_answer]);
+            }
+          }
+        } else if (question.type === "multiple_selection") {
+          // For multiple selection, save the correct answers as a JSON array
+          if (Array.isArray(question.content?.correctAnswers) && question.content.correctAnswers.length > 0) {
+            correctAnswer = JSON.stringify(question.content.correctAnswers);
           } else if (question.content?.correct_answer) {
             if (Array.isArray(question.content.correct_answer)) {
               correctAnswer = JSON.stringify(question.content.correct_answer);
@@ -551,7 +571,7 @@ const CreateReadingNew: React.FC = () => {
           reading_section_id: section.id,
           question_number: question.content?.question_number || index + 1,
           question_type: dbQuestionType,
-          question_text: question.content?.question || question.content?.text || question.summary,
+          question_text: question.content?.question || question.content?.text || question.summary || `Question ${question.content?.question_number || index + 1}`,
           options: optionsField,
           correct_answer: correctAnswer,
           points: 1, // Default points
@@ -563,14 +583,79 @@ const CreateReadingNew: React.FC = () => {
       if (questionsToInsert.length > 0) {
         console.log("Questions to be saved:", questionsToInsert);
         
-        const { error: questionsError } = await supabase
+        const { data: savedQuestions, error: questionsError } = await supabase
           .from("reading_questions")
-          .insert(questionsToInsert);
+          .insert(questionsToInsert)
+          .select();
 
         if (questionsError) {
           console.error("Questions creation error:", questionsError);
           console.error("Questions data being inserted:", questionsToInsert);
           throw questionsError;
+        }
+
+        // Update TipTap content to replace dynamic IDs with database IDs
+        if (savedQuestions && content) {
+          console.log("🔍 Updating TipTap content with database IDs...");
+          
+          let updatedContent: any = content;
+          const questionMapping = new Map();
+          
+          // Create mapping from dynamic IDs to database IDs
+          savedQuestions.forEach((savedQuestion, index) => {
+            const originalQuestion = questions[index];
+            if (originalQuestion && originalQuestion.id !== savedQuestion.id) {
+              questionMapping.set(originalQuestion.id, savedQuestion.id);
+            }
+          });
+          
+          console.log("🔍 Question ID mapping:", Object.fromEntries(questionMapping));
+          
+          // Update content if we have mappings
+          if (questionMapping.size > 0) {
+            const updateNodeIds = (node: any): any => {
+              if (node.attrs && node.attrs.id && questionMapping.has(node.attrs.id)) {
+                return {
+                  ...node,
+                  attrs: {
+                    ...node.attrs,
+                    id: questionMapping.get(node.attrs.id)
+                  }
+                };
+              }
+              
+              if (node.content && Array.isArray(node.content)) {
+                return {
+                  ...node,
+                  content: node.content.map(updateNodeIds)
+                };
+              }
+              
+              return node;
+            };
+            
+            if (typeof updatedContent === 'object' && updatedContent && updatedContent.content && Array.isArray(updatedContent.content)) {
+              updatedContent = {
+                ...updatedContent,
+                content: updatedContent.content.map(updateNodeIds)
+              };
+            }
+            
+            console.log("🔍 Updated content with database IDs");
+            
+            // Save the updated content to the database
+            const { error: contentUpdateError } = await supabase
+              .from("reading_sections")
+              .update({
+                content: typeof updatedContent === "string" ? updatedContent : JSON.stringify(updatedContent)
+              })
+              .eq("id", section.id);
+              
+            if (contentUpdateError) {
+              console.error("Error updating content with database IDs:", contentUpdateError);
+              // Don't throw error here as the questions were saved successfully
+            }
+          }
         }
       }
 

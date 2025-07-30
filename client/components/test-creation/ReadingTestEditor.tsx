@@ -28,13 +28,15 @@ import {
 import { ShortAnswerNode } from './ShortAnswerNode';
 import { MatchingNode } from './MatchingNode';
 import { MCQNode } from './MCQNode';
+import { MSNode } from './MSNode';
 
 interface Question {
   id: string;
   type:
     | "short_answer"
     | "multiple_choice"
-    | "matching";
+    | "matching"
+    | "multiple_selection";
   content: any;
   summary: string;
 }
@@ -85,6 +87,10 @@ export function ReadingTestEditor(
   // Add TFNG state
   const [tfngQuestion, setTfngQuestion] = useState("");
   const [tfngCorrectOption, setTfngCorrectOption] = useState(0);
+  // Add MS state
+  const [msQuestion, setMsQuestion] = useState("");
+  const [msOptions, setMsOptions] = useState(["", "", "", ""]);
+  const [msCorrectAnswers, setMsCorrectAnswers] = useState<string[]>([]); // Changed from number[] to string[]
   // Add error state for MCQ/TFNG
   const [optionError, setOptionError] = useState("");
 
@@ -97,6 +103,7 @@ export function ReadingTestEditor(
       ShortAnswerNode,
       MatchingNode,
       MCQNode,
+      MSNode,
     ],
     content: content ?? initialContent ?? "",
     editorProps: {
@@ -163,6 +170,13 @@ export function ReadingTestEditor(
           content: node,
           summary: node.attrs?.summary || "Multiple choice question",
         });
+      } else if (node.type === "ms") {
+        questions.push({
+          id: node.attrs?.id || `ms_${Date.now()}`,
+          type: "multiple_selection",
+          content: node,
+          summary: node.attrs?.summary || "Multiple selection question",
+        });
       } else if (node.content) {
         node.content.forEach(traverse);
       }
@@ -198,7 +212,7 @@ export function ReadingTestEditor(
 
   const openQuestionModal = (type: string) => {
     // Only allow supported question types
-    if (["short_answer", "multiple_choice", "matching", "tfng"].includes(type)) {
+    if (["short_answer", "multiple_choice", "matching", "tfng", "multiple_selection"].includes(type)) {
       setCurrentQuestionType(type);
       setShowModal(true);
       resetForms();
@@ -214,6 +228,10 @@ export function ReadingTestEditor(
     // Reset TFNG state
     setTfngQuestion("");
     setTfngCorrectOption(0);
+    // Reset MS state
+    setMsQuestion("");
+    setMsOptions(["", "", "", ""]);
+    setMsCorrectAnswers([]);
     setOptionError(""); // Clear error on reset
   };
 
@@ -238,6 +256,11 @@ export function ReadingTestEditor(
         const answerCount = questionContent.answers?.length || 0;
         const startNumber = questionContent.question_number || 0;
         maxNumber = Math.max(maxNumber, startNumber + answerCount - 1);
+      } else if (question.type === "multiple_selection") {
+        // For multiple selection, count each correct answer as a separate question
+        const correctAnswerCount = questionContent.correctAnswers?.length || 0;
+        const startNumber = questionContent.question_number || 0;
+        maxNumber = Math.max(maxNumber, startNumber + correctAnswerCount - 1);
       } else {
         // For other types, just use the question number
         maxNumber = Math.max(maxNumber, questionContent.question_number || 0);
@@ -283,6 +306,21 @@ export function ReadingTestEditor(
     }
   };
 
+  const addMsOption = () => {
+    if (msOptions.length < 6) {
+      setMsOptions([...msOptions, ""]);
+    }
+  };
+
+  const removeMsOption = (index: number) => {
+    if (msOptions.length > 2) {
+      const newOptions = msOptions.filter((_, i) => i !== index);
+      setMsOptions(newOptions);
+      // Remove the option value from correct answers if it was selected
+      const removedOption = msOptions[index];
+      setMsCorrectAnswers(msCorrectAnswers.filter(answer => answer !== removedOption));
+    }
+  };
 
 
   const insertShortAnswer = (answer: string, questionNumber?: number) => {
@@ -573,6 +611,63 @@ export function ReadingTestEditor(
         resetForms();
         return;
       }
+      case "multiple_selection": {
+        if (msOptions.filter((opt) => opt.trim()).length < 2) return;
+        const validOptions = msOptions.filter((opt) => opt.trim());
+        if (msCorrectAnswers.length === 0) {
+          setOptionError("Please select at least one correct answer.");
+          return;
+        }
+        const id = `ms_${Date.now()}`;
+        const nextQuestionNumber = getNextQuestionNumber();
+
+        console.log("🔍 MS Debug:", {
+          options: validOptions,
+          correctAnswers: msCorrectAnswers,
+          questionNumber: nextQuestionNumber
+        });
+
+        // Insert custom node
+        console.log("🔍 About to insert MS node:", {
+          id,
+          question_number: nextQuestionNumber,
+          options: validOptions,
+          correctAnswers: msCorrectAnswers
+        });
+
+        editor.chain().focus().insertContent({
+          type: 'ms',
+          attrs: {
+            id,
+            question_number: nextQuestionNumber,
+            options: validOptions,
+            correct_answers: msCorrectAnswers,
+          },
+        }).run();
+        // Add to questions array
+        const newQuestion = {
+          id,
+          type: "multiple_selection" as const,
+          content: {
+            options: validOptions,
+            correctAnswers: msCorrectAnswers,
+            question_number: nextQuestionNumber,
+          },
+          summary: `MS ${nextQuestionNumber}: ${validOptions.length} options`,
+        } as Question;
+
+        console.log("🔍 MS Question Array:", newQuestion);
+
+        const updatedQuestions = [...questions, newQuestion];
+        setQuestions(updatedQuestions);
+        if (onQuestionsChange) onQuestionsChange(updatedQuestions);
+        if (onEditorQuestionsChange) onEditorQuestionsChange(updatedQuestions);
+        setQuestionCounter((prev) => prev + 1);
+        setShowModal(false);
+        setCurrentQuestionType(null);
+        resetForms();
+        return;
+      }
     }
 
     setShowModal(false);
@@ -629,6 +724,11 @@ export function ReadingTestEditor(
         const answerCount = q.content.answers?.length || 0;
         const startNumber = q.content.question_number || 0;
         totalQuestions = Math.max(totalQuestions, startNumber + answerCount - 1);
+      } else if (q.type === "multiple_selection") {
+        // For multiple selection, count each correct answer as a separate question
+        const correctAnswerCount = q.content.correctAnswers?.length || 0;
+        const startNumber = q.content.question_number || 0;
+        totalQuestions = Math.max(totalQuestions, startNumber + correctAnswerCount - 1);
       } else {
         // For other types, just use the question number
         totalQuestions = Math.max(totalQuestions, q.content.question_number || 0);
@@ -657,6 +757,13 @@ export function ReadingTestEditor(
     setTfngQuestion("");
     setTfngCorrectOption(0);
     openQuestionModal("tfng");
+  };
+  // Add MS Insertion Handler
+  const handleInsertMS = () => {
+    setMsQuestion("");
+    setMsOptions(["", "", "", ""]);
+    setMsCorrectAnswers([]);
+    openQuestionModal("multiple_selection");
   };
 
   return (
@@ -708,6 +815,15 @@ export function ReadingTestEditor(
                   >
                     <List className="h-4 w-4" />
                     TFNG
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleInsertMS}
+                    className="flex items-center gap-2"
+                  >
+                    <List className="h-4 w-4" />
+                    Multiple Selection
                   </Button>
 
                   {/* Map/Diagram button removed */}
@@ -786,6 +902,9 @@ export function ReadingTestEditor(
                         } else if (question.type === "multiple_choice") {
                           questionsInThisItem = 1; // Multiple choice is a single question
                           displayNumber = `Q${questionNumber}`;
+                        } else if (question.type === "multiple_selection") {
+                          questionsInThisItem = 1; // Multiple selection is a single question
+                          displayNumber = `Q${questionNumber}`;
                         } else {
                           displayNumber = `Q${questionNumber}`;
                         }
@@ -810,7 +929,8 @@ export function ReadingTestEditor(
                                         "Multiple choice question"
                                       : question.type === 'short_answer'
                                         ? `Answer: ${questionContent.answer || 'No answer'}`
-
+                                        : question.type === "multiple_selection"
+                                          ? `${questionContent.options?.length || 0} options: ${questionContent.options?.map((opt: string, idx: number) => `${opt}`).join(', ')}`
                                           : "Question")}
                               </div>
                             </div>
@@ -1018,6 +1138,69 @@ export function ReadingTestEditor(
                       <Input value={option} readOnly className="flex-1 bg-gray-100" />
                     </div>
                   ))}
+                </div>
+                {optionError && (
+                  <div className="text-red-500 text-sm mt-2">{optionError}</div>
+                )}
+              </div>
+            )}
+
+            {/* Multiple Selection */}
+            {currentQuestionType === "multiple_selection" && (
+              <div className="space-y-4">
+                <div>
+                  <Label>Options (Check the correct answers)</Label>
+                  {msOptions.map((option, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center space-x-2 mt-2"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={msCorrectAnswers.includes(option)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setMsCorrectAnswers([...msCorrectAnswers, option]);
+                          } else {
+                            setMsCorrectAnswers(msCorrectAnswers.filter(o => o !== option));
+                          }
+                        }}
+                        className="mt-0.5"
+                      />
+                      <Input
+                        placeholder={`Option ${String.fromCharCode(65 + index)}`}
+                        value={option}
+                        onChange={(e) => {
+                          const newOptions = [...msOptions];
+                          newOptions[index] = e.target.value;
+                          setMsOptions(newOptions);
+                        }}
+                        className="flex-1"
+                      />
+                      {msOptions.length > 2 && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            const newOptions = msOptions.filter((_, i) => i !== index);
+                            setMsOptions(newOptions);
+                            // Remove this index from correct answers and adjust other indices
+                            setMsCorrectAnswers(msCorrectAnswers
+                              .filter(o => o !== option)
+                            );
+                          }}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  {msOptions.length < 6 && (
+                    <Button size="sm" onClick={addMsOption} className="mt-2">
+                      <Plus className="h-4 w-4 mr-1" />
+                      Add Option
+                    </Button>
+                  )}
                 </div>
                 {optionError && (
                   <div className="text-red-500 text-sm mt-2">{optionError}</div>

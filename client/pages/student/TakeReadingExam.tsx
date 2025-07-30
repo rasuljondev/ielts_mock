@@ -131,14 +131,14 @@ const TakeReadingExam: React.FC = () => {
 
   // Auto-save interval
   useEffect(() => {
-    if (submissionId && Object.keys(answers).length > 0) {
+    if (submissionId && Object.keys(answers).length > 0 && !isSubmitting) {
       const interval = setInterval(() => {
         autoSaveAnswers();
       }, 30000); // Auto-save every 30 seconds
 
       return () => clearInterval(interval);
     }
-  }, [submissionId, answers]);
+  }, [submissionId, answers, isSubmitting]);
 
   // Timer countdown
   useEffect(() => {
@@ -163,6 +163,14 @@ const TakeReadingExam: React.FC = () => {
       return () => clearInterval(interval);
     }
   }, [timeRemaining, isSubmitting, testId]);
+
+  // Cleanup effect to prevent state updates during navigation
+  useEffect(() => {
+    return () => {
+      // Cleanup function to prevent state updates after unmount
+      setIsSubmitting(true);
+    };
+  }, []);
 
   // Load test data on mount
   useEffect(() => {
@@ -435,8 +443,14 @@ const TakeReadingExam: React.FC = () => {
       localStorage.removeItem(`exam-time-${testId}`);
       localStorageKey && localStorage.removeItem(localStorageKey);
 
-      toast.success("Test submitted successfully!");
-      navigate("/student/tests/history");
+      // Set submitting to false before navigation to prevent DOM updates
+      setIsSubmitting(false);
+      
+      // Use setTimeout to ensure all state updates are complete before navigation
+      setTimeout(() => {
+        toast.success("Test submitted successfully!");
+        navigate("/student/tests/history");
+      }, 100);
     } catch (error: any) {
       logError("handleSubmitTest", error);
       const classified = classifyError(error);
@@ -654,6 +668,73 @@ const TakeReadingExam: React.FC = () => {
           </div>
         );
 
+      case "multiple_selection":
+        // Handle multiple selection questions
+        let msData = null;
+        try {
+          msData = typeof question.options === "string" 
+            ? JSON.parse(question.options) 
+            : question.options;
+        } catch (error) {
+          console.error("Error parsing ms data:", error);
+          msData = { options: [] };
+        }
+
+        const msOptions = Array.isArray(msData?.options) ? msData.options : [];
+        const currentAnswers = answers[question.id] || [];
+        
+        // Get the number of correct answers to limit selections
+        let correctAnswerCount = 0;
+        try {
+          const correctAnswers = typeof question.correct_answer === 'string' 
+            ? JSON.parse(question.correct_answer) 
+            : question.correct_answer;
+          correctAnswerCount = Array.isArray(correctAnswers) ? correctAnswers.length : 0;
+        } catch (error) {
+          console.error("Error parsing correct answers:", error);
+          correctAnswerCount = 0;
+        }
+        
+        // Debug logging (commented out to prevent console spam)
+        // console.log("🔍 MS Question Input Debug:", {
+        //   questionId: question.id,
+        //   questionType: question.type,
+        //   options: question.options,
+        //   parsedOptions: msOptions,
+        //   currentAnswers,
+        //   correctAnswerCount,
+        //   hasQuestionId: !!question.id
+        // });
+        
+        return (
+          <div className="space-y-2">
+            {msOptions.map((option: string, optionIndex: number) => (
+              <label key={optionIndex} className="flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={currentAnswers.includes(option)}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      // Only allow selection if under the limit
+                      if (currentAnswers.length < correctAnswerCount) {
+                        const newAnswers = [...currentAnswers, option];
+                        updateAnswer(question.id, newAnswers);
+                      }
+                    } else {
+                      // Always allow deselection
+                      const newAnswers = currentAnswers.filter(a => a !== option);
+                      updateAnswer(question.id, newAnswers);
+                    }
+                  }}
+                  disabled={!currentAnswers.includes(option) && currentAnswers.length >= correctAnswerCount}
+                  className="mr-2"
+                />
+                <span>{option}</span>
+              </label>
+            ))}
+          </div>
+        );
+
       case "short_answer":
       case "sentence_completion":
 
@@ -804,34 +885,52 @@ const TakeReadingExam: React.FC = () => {
 
       // Custom TipTap nodes for questions
       case "short_answer":
+        // Must match question_number, type, AND section_number (current passage)
+        const shortAnswerQuestion = passages.flatMap(p => p.questions).find(
+          (q: any) => q.question_number === (node.attrs?.question_number || node.attrs?.number) && 
+                      q.type === "short_answer" && 
+                      q.section_number === currentPassage
+        );
+        const questionId = shortAnswerQuestion?.id;
+        
         return (
           <input
             key={index}
             type="text"
-            value={answers[node.attrs?.id] || ""}
-            onChange={(e) => updateAnswer(node.attrs?.id, e.target.value)}
+            value={questionId ? (answers[questionId] || "") : ""}
+            onChange={questionId ? (e) => updateAnswer(questionId, e.target.value) : undefined}
             placeholder={node.attrs?.placeholder || `Answer ${node.attrs?.question_number}`}
             className="inline-block w-20 h-7 border border-gray-300 rounded bg-white text-center text-sm font-medium shadow-sm focus:outline-none focus:border-blue-500 focus:shadow-md mx-1"
+            disabled={!questionId}
           />
         );
 
       case "mcq":
+        // Must match question_number, type, AND section_number (current passage)
+        const mcqQuestion = passages.flatMap(p => p.questions).find(
+          (q: any) => q.question_number === (node.attrs?.question_number || node.attrs?.number) && 
+                      q.type === "multiple_choice" && 
+                      q.section_number === currentPassage
+        );
+        const mcqQuestionId = mcqQuestion?.id;
         const options = node.attrs?.options || [];
+        
         return (
           <div key={index} className="mb-4">
             <p className="font-medium mb-2">
-              {node.attrs?.question_number}. {node.attrs?.question_text}
+              {(node.attrs?.question_number || node.attrs?.number)}. {node.attrs?.question_text}
             </p>
             <div className="space-y-1">
               {options.map((option: string, optionIndex: number) => (
                 <label key={optionIndex} className="flex items-center cursor-pointer">
                   <input
                     type="radio"
-                    name={`mcq_${node.attrs?.id}`}
+                    name={`mcq_${mcqQuestionId}`}
                     value={option}
-                    checked={answers[node.attrs?.id] === option}
-                    onChange={(e) => updateAnswer(node.attrs?.id, e.target.value)}
+                    checked={mcqQuestionId ? answers[mcqQuestionId] === option : false}
+                    onChange={mcqQuestionId ? (e) => updateAnswer(mcqQuestionId, e.target.value) : undefined}
                     className="mr-2"
+                    disabled={!mcqQuestionId}
                   />
                   <span>{option}</span>
                 </label>
@@ -841,6 +940,13 @@ const TakeReadingExam: React.FC = () => {
         );
 
       case "matching":
+        // Must match question_number, type, AND section_number (current passage)
+        const matchingQuestion = passages.flatMap(p => p.questions).find(
+          (q: any) => q.question_number === (node.attrs?.question_number || node.attrs?.number) && 
+                      q.type === "matching" && 
+                      q.section_number === currentPassage
+        );
+        const matchingQuestionId = matchingQuestion?.id;
         const leftItems = node.attrs?.left || [];
         const rightItems = node.attrs?.right || [];
         
@@ -854,7 +960,7 @@ const TakeReadingExam: React.FC = () => {
                 <h4 className="font-medium text-gray-700 mb-3">Items:</h4>
                 {leftItems.map((item: string, itemIndex: number) => (
                   <div key={itemIndex} className="mb-2 p-2 bg-gray-50 rounded">
-                    {node.attrs?.question_number + itemIndex}. {item}
+                    {(node.attrs?.question_number || node.attrs?.number) + itemIndex}. {item}
                   </div>
                 ))}
               </div>
@@ -863,9 +969,10 @@ const TakeReadingExam: React.FC = () => {
                 {leftItems.map((_: any, itemIndex: number) => (
                   <select
                     key={itemIndex}
-                    value={answers[`${node.attrs?.id}_${itemIndex}`] || ""}
-                    onChange={(e) => updateAnswer(`${node.attrs?.id}_${itemIndex}`, e.target.value)}
+                    value={matchingQuestionId ? (answers[`${matchingQuestionId}_${itemIndex}`] || "") : ""}
+                    onChange={matchingQuestionId ? (e) => updateAnswer(`${matchingQuestionId}_${itemIndex}`, e.target.value) : undefined}
                     className="w-full mb-2 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={!matchingQuestionId}
                   >
                     <option value="">Select answer</option>
                     {rightItems.map((option: string, optIndex: number) => (
@@ -876,6 +983,84 @@ const TakeReadingExam: React.FC = () => {
                   </select>
                 ))}
               </div>
+            </div>
+          </div>
+        );
+
+      case "ms":
+        // Must match question_number, type, AND section_number (current passage)
+        const msQuestion = passages.flatMap(p => p.questions).find(
+          (q: any) => q.question_number === (node.attrs?.question_number || node.attrs?.number) && 
+                      q.type === "multiple_selection" && 
+                      q.section_number === currentPassage
+        );
+        const msQuestionId = msQuestion?.id;
+        const msOptions = node.attrs?.options || [];
+        const currentAnswers = msQuestionId ? (answers[msQuestionId] || []) : [];
+        
+        // Get the number of correct answers to limit selections
+        let correctAnswerCount = 0;
+        if (msQuestion) {
+          try {
+            const correctAnswers = typeof msQuestion.correct_answer === 'string' 
+              ? JSON.parse(msQuestion.correct_answer) 
+              : msQuestion.correct_answer;
+            correctAnswerCount = Array.isArray(correctAnswers) ? correctAnswers.length : 0;
+          } catch (error) {
+            console.error("Error parsing correct answers:", error);
+            correctAnswerCount = 0;
+          }
+        }
+        
+        // Debug logging (commented out to prevent console spam)
+        // console.log("🔍 MS Question Debug:", {
+        //   nodeAttrs: node.attrs,
+        //   questionNumber: node.attrs?.number,
+        //   question_number: node.attrs?.question_number,
+        //   number: node.attrs?.number,
+        //   currentPassage,
+        //   foundQuestion: msQuestion,
+        //   msQuestionId,
+        //   msOptions,
+        //   currentAnswers,
+        //   correctAnswerCount,
+        //   allQuestions: passages.flatMap(p => p.questions).map(q => ({
+        //     id: q.id,
+        //     type: q.type,
+        //     question_number: q.question_number,
+        //     section_number: q.section_number
+        //   }))
+        // });
+        
+        return (
+          <div key={index} className="mb-4">
+            <div className="space-y-2">
+              {msOptions.map((option: string, optionIndex: number) => (
+                <label key={optionIndex} className="flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={currentAnswers.includes(option)}
+                    onChange={(e) => {
+                      if (msQuestionId) {
+                        if (e.target.checked) {
+                          // Only allow selection if under the limit
+                          if (currentAnswers.length < correctAnswerCount) {
+                            const newAnswers = [...currentAnswers, option];
+                            updateAnswer(msQuestionId, newAnswers);
+                          }
+                        } else {
+                          // Always allow deselection
+                          const newAnswers = currentAnswers.filter(a => a !== option);
+                          updateAnswer(msQuestionId, newAnswers);
+                        }
+                      }
+                    }}
+                    disabled={!msQuestionId || (!currentAnswers.includes(option) && currentAnswers.length >= correctAnswerCount)}
+                    className="mr-2"
+                  />
+                  <span>{option}</span>
+                </label>
+              ))}
             </div>
           </div>
         );
@@ -916,8 +1101,9 @@ const TakeReadingExam: React.FC = () => {
         if (questionMatch) {
           const questionNum = parseInt(questionMatch[1]);
           const questionText = questionMatch[2];
-          const question = currentPassageData?.questions?.find(
-            (q) => q.question_number === questionNum,
+          // Search across all passages for the matching question
+          const question = passages.flatMap(p => p.questions).find(
+            (q) => q.question_number === questionNum && q.section_number === currentPassage,
           );
 
           if (question && question.type === "multiple_choice") {
@@ -1086,12 +1272,15 @@ const TakeReadingExam: React.FC = () => {
             // Extract the number inside the brackets (allow spaces)
             const match = part.match(/\[\s*(\d+)\s*\]/);
             const questionNumber = match ? parseInt(match[1], 10) : undefined;
-            let questionId: string = questionNumber?.toString() || '';
+            let questionId: string | undefined = undefined;
             let isShortAnswer = false;
             
-            if (questionNumber && currentPassageData?.questions) {
-              const q = currentPassageData.questions.find(
-                q => q.question_number === questionNumber && q.type === "short_answer"
+            if (questionNumber && passages) {
+              // Only use DB ID, do not fallback
+              const q = passages.flatMap(p => p.questions).find(
+                q => q.question_number === questionNumber && 
+                     q.type === "short_answer" && 
+                     q.section_number === currentPassage
               );
               if (q) {
                 questionId = q.id;
@@ -1103,8 +1292,8 @@ const TakeReadingExam: React.FC = () => {
               <input
                 key={partIndex}
                 type="text"
-                value={answers[questionId] || ""}
-                onChange={(e) => updateAnswer(questionId, e.target.value)}
+                value={questionId ? (answers[questionId] || "") : ""}
+                onChange={questionId ? (e) => updateAnswer(questionId!, e.target.value) : undefined}
                 className="inline-block w-20 h-7 border border-gray-300 rounded bg-white text-center font-medium shadow-sm focus:outline-none focus:border-blue-500 focus:shadow-md mx-1"
                 placeholder={isShortAnswer ? String(questionNumber) : "Not a short answer"}
                 disabled={!isShortAnswer}
@@ -1242,11 +1431,11 @@ const TakeReadingExam: React.FC = () => {
           <div className="text-center py-8">
             <p className="text-gray-500 mb-4">
               Unable to parse test content.
-            </p>
-          </div>
-        );
-      }
-      
+          </p>
+        </div>
+      );
+    }
+    
       return (
         <div className="space-y-6">
           {result.content.content.map((node: any, index: number) => {
@@ -1312,6 +1501,18 @@ const TakeReadingExam: React.FC = () => {
             const options = typeof question.options === 'string' ? JSON.parse(question.options) : question.options;
             if (options && options.left && Array.isArray(options.left)) {
               total += options.left.length;
+            } else {
+              total += 1; // Fallback
+            }
+          } catch (e) {
+            total += 1; // Fallback
+          }
+        } else if (question.type === "multiple_selection") {
+          // For multiple selection, count each correct answer as one question
+          try {
+            const correctAnswers = typeof question.correct_answer === 'string' ? JSON.parse(question.correct_answer) : question.correct_answer;
+            if (Array.isArray(correctAnswers)) {
+              total += correctAnswers.length;
             } else {
               total += 1; // Fallback
             }
@@ -1546,6 +1747,10 @@ const TakeReadingExam: React.FC = () => {
                 return Object.keys(answers).some(answerKey => 
                   answerKey.startsWith(`${q.id}_`)
                 );
+              } else if (q.type === "multiple_selection") {
+                // For multiple selection questions, check if the answer array has any values
+                const answer = answers[q.id];
+                return Array.isArray(answer) && answer.length > 0;
               } else {
                 // For regular questions, check direct answer
                 return !!answers[q.id];
@@ -1558,6 +1763,10 @@ const TakeReadingExam: React.FC = () => {
                 return Object.keys(answers).some(answerKey => 
                   answerKey.startsWith(`${q.id}_`)
                 );
+              } else if (q.type === "multiple_selection") {
+                // For multiple selection questions, check if the answer array has any values
+                const answer = answers[q.id];
+                return Array.isArray(answer) && answer.length > 0;
               } else {
                 // For regular questions, check direct answer
                 return !!answers[q.id];

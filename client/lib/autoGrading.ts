@@ -227,34 +227,141 @@ const mapDynamicIdToDatabaseId = (dynamicId: string, questions: any[]): string |
 
 // Helper function to find student answer for a question, handling both database IDs and dynamic IDs
 const findStudentAnswer = (question: any, userAnswers: any): any => {
-  const questionId = question.id;
-  
-  // First, try to find answer using the database question ID
-  if (userAnswers[questionId]) {
-    return userAnswers[questionId];
-  }
-  
-  // If not found, try to find answer using dynamic ID patterns
+  // Get all answer keys that could match this question
   const answerKeys = Object.keys(userAnswers);
   
-  // For MCQ questions, look for mcq_* keys
+  console.log("🔍 findStudentAnswer called for question:", {
+    questionId: question.id,
+    questionType: question.question_type,
+    questionNumber: question.question_number,
+    allAnswerKeys: answerKeys
+  });
+
+  // For MCQ questions, first try exact question ID match, then look for mcq_* keys
   if (question.question_type === 'multiple_choice') {
+    // First try exact question ID match
+    if (userAnswers[question.id]) {
+      console.log("🔍 Found exact MCQ match:", question.id);
+      return userAnswers[question.id];
+    }
+    
+    // Try to find by question number in any key
+    const questionNumberStr = question.question_number?.toString();
+    if (questionNumberStr) {
+      const numberMatch = answerKeys.find(key => 
+        key.includes(questionNumberStr) && (key.startsWith('mcq_') || key.includes('TRUE') || key.includes('FALSE'))
+      );
+      if (numberMatch) {
+        console.log("🔍 Found MCQ match by question number:", numberMatch);
+        return userAnswers[numberMatch];
+      }
+    }
+    
+    // Fallback: look for mcq_* keys
     const mcqKey = answerKeys.find(key => key.startsWith('mcq_'));
     if (mcqKey) {
+      console.log("🔍 Found mcq_* match:", mcqKey);
       return userAnswers[mcqKey];
+    }
+    
+    // Final fallback: look for any key that contains TRUE/FALSE/NOT GIVEN
+    const tfngKey = answerKeys.find(key => 
+      userAnswers[key] === 'TRUE' || userAnswers[key] === 'FALSE' || userAnswers[key] === 'NOT GIVEN'
+    );
+    if (tfngKey) {
+      console.log("🔍 Found TRUE/FALSE/NOT GIVEN key:", tfngKey);
+      return userAnswers[tfngKey];
     }
   }
   
-  // For short answer questions, look for q_* keys
+  // For short answer questions, look for the specific question ID
   if (question.question_type === 'short_answer') {
-    const shortAnswerKey = answerKeys.find(key => key.startsWith('q_'));
-    if (shortAnswerKey) {
-      return userAnswers[shortAnswerKey];
+    // First try to find exact question ID match
+    const exactMatch = answerKeys.find(key => key === question.id);
+    if (exactMatch) {
+      console.log("🔍 Found exact match for short answer:", exactMatch);
+      return userAnswers[exactMatch];
     }
+    
+    // If no exact match, look for q_* keys that contain the question ID
+    const questionIdStr = question.id.toString();
+    const qKeyMatch = answerKeys.find(key => 
+      key.startsWith('q_') && key.includes(questionIdStr)
+    );
+    if (qKeyMatch) {
+      console.log("🔍 Found q_* match for short answer:", qKeyMatch);
+      return userAnswers[qKeyMatch];
+    }
+    
+    // Additional fallback: try to match by question number in q_* keys
+    const questionNumberStr = question.question_number?.toString();
+    if (questionNumberStr) {
+      const numberMatch = answerKeys.find(key => 
+        key.startsWith('q_') && key.includes(questionNumberStr)
+      );
+      if (numberMatch) {
+        console.log("🔍 Found q_* number match for short answer:", numberMatch);
+        return userAnswers[numberMatch];
+      }
+    }
+    
+    // Final fallback: look for any q_* key (for dynamic keys)
+    // But be more careful - try to match by question order
+    const qKeys = answerKeys.filter(key => key.startsWith('q_'));
+    if (qKeys.length === 1) {
+      console.log("🔍 Found single q_* key for short answer:", qKeys[0]);
+      return userAnswers[qKeys[0]];
+    } else if (qKeys.length > 1) {
+      // Try to match by question order - assume q_* keys are in order
+      const sortedQKeys = qKeys.sort();
+      const questionIndex = question.question_number - 1; // Convert to 0-based index
+      if (questionIndex >= 0 && questionIndex < sortedQKeys.length) {
+        const selectedKey = sortedQKeys[questionIndex];
+        console.log("🔍 Found q_* key by order for short answer:", selectedKey, "for question", question.question_number);
+        return userAnswers[selectedKey];
+      } else {
+        // If order doesn't work, try to match by passage/section
+        // Look for keys that haven't been used yet
+        const unusedQKeys = qKeys.filter(key => 
+          !Object.keys(userAnswers).some(existingKey => 
+            existingKey !== key && userAnswers[existingKey] === userAnswers[key]
+          )
+        );
+        if (unusedQKeys.length > 0) {
+          const selectedKey = unusedQKeys[0];
+          console.log("🔍 Found unused q_* key for short answer:", selectedKey);
+          return userAnswers[selectedKey];
+        } else {
+          console.log("🔍 Multiple q_* keys found, cannot determine which one to use:", qKeys);
+        }
+      }
+    }
+    
+    console.log("🔍 No answer found for short answer question:", {
+      questionId: question.id,
+      questionNumber: question.question_number,
+      availableKeys: answerKeys.filter(key => key.startsWith('q_'))
+    });
   }
   
   // For matching questions, we'll handle them separately in the main processing
   if (question.question_type === 'matching') {
+    console.log("🔍 Matching question - will be handled separately");
+    return null;
+  }
+
+  // For multiple selection questions
+  if (question.question_type === 'multiple_selection') {
+    const msAnswer = userAnswers[question.id];
+    if (Array.isArray(msAnswer)) {
+      console.log("🔍 Found MS answer array:", msAnswer);
+      return msAnswer;
+    } else if (msAnswer) {
+      // If it's a single value, convert to array
+      console.log("🔍 Found MS single answer:", msAnswer);
+      return [msAnswer];
+    }
+    console.log("🔍 No MS answer found for question:", question.id);
     return null;
   }
   
@@ -269,6 +376,13 @@ const findStudentAnswer = (question: any, userAnswers: any): any => {
       return mapAnswers;
     }
   }
+
+  console.log("🔍 No answer found for question:", {
+    questionId: question.id,
+    questionType: question.question_type,
+    questionNumber: question.question_number,
+    availableKeys: answerKeys
+  });
   
   return null;
 };
@@ -347,6 +461,9 @@ export const autoGradeSubmission = async (
         (section: any) => section.reading_questions || [],
       ) || [];
 
+    // Sort questions by question_number to ensure proper order
+    readingQuestions.sort((a: any, b: any) => a.question_number - b.question_number);
+
     // Debug: Log all reading questions being processed
     console.log("🔍 Reading questions loaded from database:", {
       totalQuestions: readingQuestions.length,
@@ -360,8 +477,16 @@ export const autoGradeSubmission = async (
     });
 
     const readingResults: QuestionResult[] = [];
+    const processedQuestionIds = new Set<string>();
     
     readingQuestions.forEach((question: any) => {
+      // Skip if already processed
+      if (processedQuestionIds.has(question.id)) {
+        console.log("🔍 Skipping duplicate question:", question.id);
+        return;
+      }
+      processedQuestionIds.add(question.id);
+      
       // Debug: Log each question being processed
       console.log("🔍 Processing question:", {
         id: question.id,
@@ -375,57 +500,234 @@ export const autoGradeSubmission = async (
       // Use the same helper function for reading questions
       const userAnswer = findStudentAnswer(question, userAnswers);
       
-      // Special handling for MCQ questions
+      // Process MCQ questions
       if (question.question_type === "multiple_choice") {
         console.log("🔍 Processing Reading MCQ Question:", {
           questionId: question.id,
-          correctAnswer: question.correct_answer,
-          correctAnswerType: typeof question.correct_answer,
+          questionNumber: question.question_number,
           options: question.options,
-          userAnswer: userAnswer
+          correctAnswer: question.correct_answer,
+          correctIndex: question.correct_index
         });
+
+        // Handle different MCQ answer formats
+        let correctAnswer = "";
         
-        // For MCQ questions, the correct_answer is stored as an index
-        // but the student answer is stored as the actual option text
-        // We need to convert the index to the actual option text for comparison
+        // First, try to parse options (they're stored as JSON strings)
+        let options: string[] = [];
         try {
-          let options = question.options;
-          if (typeof options === "string") {
-            options = JSON.parse(options);
-          }
-          
-          if (Array.isArray(options) && options.length > 0) {
-            const correctIndex = parseInt(question.correct_answer);
-            if (!isNaN(correctIndex) && correctIndex >= 0 && correctIndex < options.length) {
-              const correctAnswer = options[correctIndex];
-              const isCorrect = answersMatch(userAnswer, correctAnswer);
-              
-              readingResults.push({
-                questionId: question.id,
-                questionText: question.question_text,
-                questionType: question.question_type,
-                userAnswer,
-                correctAnswer: correctAnswer,
-                isCorrect,
-                points: isCorrect ? question.points || 1 : 0,
-                section: "reading" as const,
-                explanation: question.explanation,
-              });
-            } else {
-              console.warn("🔍 Invalid Reading MCQ correct answer index:", {
-                correctAnswer: question.correct_answer,
-                optionsLength: options.length
-              });
-            }
+          if (typeof question.options === 'string') {
+            options = JSON.parse(question.options);
+          } else if (Array.isArray(question.options)) {
+            options = question.options;
           } else {
-            console.warn("🔍 Reading MCQ question has no valid options:", {
-              questionId: question.id,
-              options: question.options
-            });
+            options = [];
           }
         } catch (error) {
-          console.error("🔍 Error processing Reading MCQ options:", error);
+          console.error("🔍 Error parsing MCQ options:", error);
+          options = [];
         }
+        
+        console.log("🔍 MCQ Options parsed:", {
+          questionId: question.id,
+          originalOptions: question.options,
+          parsedOptions: options,
+          correctAnswer: question.correct_answer,
+          correctIndex: question.correct_index
+        });
+        
+        // Check if correct_answer is a numeric index
+        if (question.correct_answer !== null && question.correct_answer !== undefined && question.correct_answer !== "") {
+          const correctAnswerValue = question.correct_answer;
+          
+          // Check if it's a numeric index
+          if (!isNaN(parseInt(correctAnswerValue.toString()))) {
+            const correctIndex = parseInt(correctAnswerValue.toString());
+            
+            if (correctIndex >= 0 && correctIndex < options.length) {
+              correctAnswer = options[correctIndex];
+              console.log("🔍 MCQ: Using index", correctIndex, "->", correctAnswer);
+            } else {
+              console.warn("🔍 Invalid Reading MCQ correct answer index:", {
+                questionId: question.id,
+                correctIndex: correctIndex,
+                optionsLength: options.length,
+                options: options
+              });
+              correctAnswer = options[0] || "";
+            }
+          } else {
+            // It's a string answer, use it directly
+            correctAnswer = correctAnswerValue.toString();
+            console.log("🔍 MCQ: Using string answer:", correctAnswer);
+          }
+        } else if (question.correct_index !== null && question.correct_index !== undefined) {
+          // If correct_index is provided, get the answer from options
+          const correctIndex = parseInt(question.correct_index.toString());
+          
+          if (correctIndex >= 0 && correctIndex < options.length) {
+            correctAnswer = options[correctIndex];
+            console.log("🔍 MCQ: Using correct_index", correctIndex, "->", correctAnswer);
+          } else {
+            console.warn("🔍 Invalid Reading MCQ correct answer index:", {
+              questionId: question.id,
+              correctIndex: question.correct_index,
+              optionsLength: options.length,
+              options: options
+            });
+            correctAnswer = options[0] || "";
+          }
+        } else {
+          console.warn("🔍 No correct answer found for MCQ question:", {
+            questionId: question.id,
+            questionNumber: question.question_number,
+            correctAnswer: question.correct_answer,
+            correctIndex: question.correct_index
+          });
+          correctAnswer = options[0] || "";
+        }
+
+        const isCorrect = answersMatch(userAnswer, correctAnswer);
+        
+        console.log("🔍 Reading MCQ Question grading result:", {
+          questionId: question.id,
+          userAnswer,
+          correctAnswer,
+          isCorrect
+        });
+        
+        readingResults.push({
+          questionId: question.id,
+          questionText: question.question_text,
+          questionType: question.question_type,
+          userAnswer,
+          correctAnswer,
+          isCorrect,
+          points: isCorrect ? question.points || 1 : 0,
+          section: "reading" as const,
+        });
+      } else if (question.question_type === "multiple_selection") {
+        console.log("🔍 Processing Reading Multiple Selection Question:", {
+          questionId: question.id,
+          questionNumber: question.question_number,
+          options: question.options,
+          correctAnswer: question.correct_answer,
+          userAnswer: userAnswer
+        });
+
+        // Parse options
+        let options: string[] = [];
+        try {
+          if (typeof question.options === 'string') {
+            options = JSON.parse(question.options);
+          } else if (Array.isArray(question.options)) {
+            options = question.options;
+          } else {
+            options = [];
+          }
+        } catch (error) {
+          console.error("🔍 Error parsing MS options:", error);
+          options = [];
+        }
+
+        // Parse correct answers (array of actual values, not indices)
+        let correctAnswers: string[] = [];
+        try {
+          if (typeof question.correct_answer === 'string') {
+            correctAnswers = JSON.parse(question.correct_answer);
+          } else if (Array.isArray(question.correct_answer)) {
+            correctAnswers = question.correct_answer;
+          } else {
+            correctAnswers = [];
+          }
+        } catch (error) {
+          console.error("🔍 Error parsing MS correct answers:", error);
+          correctAnswers = [];
+        }
+
+        // Ensure userAnswer is an array
+        let userAnswersArray: string[] = [];
+        if (Array.isArray(userAnswer)) {
+          userAnswersArray = userAnswer;
+        } else if (userAnswer) {
+          // If it's a single value, convert to array
+          userAnswersArray = [userAnswer];
+        }
+
+        console.log("🔍 MS Question data:", {
+          questionId: question.id,
+          correctAnswers,
+          userAnswersArray,
+          options
+        });
+
+        // Create results in the correct order: correct matches first, then wrong ones
+        const results: QuestionResult[] = [];
+        const usedUserAnswers = new Set<string>();
+        const usedCorrectAnswers = new Set<string>();
+
+        // First, find all correct matches and create questions for each correct answer
+        correctAnswers.forEach((correctAnswer, index) => {
+          const userSelectedThisAnswer = userAnswersArray.includes(correctAnswer);
+          
+          if (userSelectedThisAnswer) {
+            usedUserAnswers.add(correctAnswer);
+            usedCorrectAnswers.add(correctAnswer);
+          }
+          
+          results.push({
+            questionId: `${question.id}_${index}`,
+            questionText: `Question ${question.question_number + index}`,
+            questionType: question.question_type,
+            userAnswer: userSelectedThisAnswer ? correctAnswer : null,
+            correctAnswer: correctAnswer,
+            isCorrect: userSelectedThisAnswer,
+            points: userSelectedThisAnswer ? 1 : 0,
+            section: "reading",
+          });
+        });
+
+        // Now handle any remaining user answers that weren't matched to correct answers
+        userAnswersArray.forEach((userAnswer) => {
+          if (!usedUserAnswers.has(userAnswer)) {
+            // Find a correct answer that hasn't been used yet
+            const unusedCorrectAnswer = correctAnswers.find(ca => !usedCorrectAnswers.has(ca));
+            
+            if (unusedCorrectAnswer) {
+              usedCorrectAnswers.add(unusedCorrectAnswer);
+              usedUserAnswers.add(userAnswer);
+              
+              // Find the index of this correct answer to get the right question number
+              const correctAnswerIndex = correctAnswers.indexOf(unusedCorrectAnswer);
+              const questionNumber = question.question_number + correctAnswerIndex;
+              
+              // Update the existing result for this correct answer
+              const existingResultIndex = results.findIndex(r => r.correctAnswer === unusedCorrectAnswer);
+              if (existingResultIndex !== -1) {
+                results[existingResultIndex] = {
+                  ...results[existingResultIndex],
+                  userAnswer: userAnswer,
+                  isCorrect: false,
+                  points: 0,
+                };
+              }
+            }
+          }
+        });
+
+        // Add all results to readingResults
+        readingResults.push(...results);
+
+        console.log("🔍 Reading MS Question grading result:", {
+          questionId: question.id,
+          totalResults: results.length,
+          results: results.map(r => ({
+            questionText: r.questionText,
+            userAnswer: r.userAnswer,
+            correctAnswer: r.correctAnswer,
+            isCorrect: r.isCorrect
+          }))
+        });
       }
       
       // Special handling for matching questions
@@ -460,8 +762,42 @@ export const autoGradeSubmission = async (
             
             // Process each pair individually like listening system
             leftItems.forEach((leftItem: string, index: number) => {
-              const studentAnswerKey = `${question.id}_${index}`;
-              const studentAnswer = userAnswers[studentAnswerKey];
+              // Try different answer key formats
+              let studentAnswer = null;
+              let studentAnswerKey = null;
+              
+              // First try the standard format: questionId_index
+              const standardKey = `${question.id}_${index}`;
+              if (userAnswers[standardKey]) {
+                studentAnswer = userAnswers[standardKey];
+                studentAnswerKey = standardKey;
+                console.log("🔍 Found matching answer with standard key:", standardKey);
+              } else {
+                // Try dynamic matching keys (matching_*) that contain the question ID
+                const questionIdStr = question.id.toString();
+                const dynamicKeyWithId = Object.keys(userAnswers).find(key => 
+                  key.startsWith('matching_') && key.includes(questionIdStr) && key.includes(`_${index}`)
+                );
+                if (dynamicKeyWithId) {
+                  studentAnswer = userAnswers[dynamicKeyWithId];
+                  studentAnswerKey = dynamicKeyWithId;
+                  console.log("🔍 Found matching answer with dynamic key (with ID):", dynamicKeyWithId);
+                } else {
+                  // Try any matching_* key with the right index, but be more specific
+                  // Look for keys that match the pattern matching_timestamp_index
+                  const dynamicKey = Object.keys(userAnswers).find(key => 
+                    key.startsWith('matching_') && key.includes(`_${index}`) && 
+                    // Make sure it's not already used by another question
+                    !readingResults.some(result => result.questionId === key)
+                  );
+                  if (dynamicKey) {
+                    studentAnswer = userAnswers[dynamicKey];
+                    studentAnswerKey = dynamicKey;
+                    console.log("🔍 Found matching answer with dynamic key:", dynamicKey);
+                  }
+                }
+              }
+              
               const correctAnswer = rightItems[index];
               const isCorrect = answersMatch(studentAnswer, correctAnswer);
               
@@ -473,7 +809,7 @@ export const autoGradeSubmission = async (
               });
               
               readingResults.push({
-                questionId: studentAnswerKey,
+                questionId: studentAnswerKey || `${question.id}_${index}`,
                 questionText: `${question.question_number}. ${leftItem}`,
                 questionType: "matching",
                 userAnswer: studentAnswer || "No answer provided",
@@ -568,6 +904,12 @@ export const autoGradeSubmission = async (
         question_number: q.question_number,
         question_type: q.question_type,
         question_text: q.question_text?.substring(0, 50) + "..."
+      })),
+      processedQuestions: readingResults.map((r: any) => ({
+        questionId: r.questionId,
+        questionText: r.questionText?.substring(0, 50) + "...",
+        questionType: r.questionType,
+        userAnswer: r.userAnswer
       }))
     });
 
@@ -903,6 +1245,14 @@ export const saveAutoGradedResults = async (
   gradedBy: string,
 ): Promise<void> => {
   try {
+    // Create submission_data from detailed results
+    const submissionData = gradingResult.detailedResults.map((result, index) => ({
+      question_number: index + 1,
+      student_answer: result.userAnswer ? JSON.stringify(result.userAnswer) : "",
+      correct_answer: result.correctAnswer ? JSON.stringify(result.correctAnswer) : "",
+      is_correct: result.isCorrect,
+    }));
+
     const { error } = await supabase
       .from("test_submissions")
       .update({
@@ -914,6 +1264,7 @@ export const saveAutoGradedResults = async (
         graded_at: new Date().toISOString(),
         graded_by: gradedBy,
         auto_grading_data: JSON.stringify(gradingResult),
+        submission_data: submissionData,
       })
       .eq("id", submissionId);
 
