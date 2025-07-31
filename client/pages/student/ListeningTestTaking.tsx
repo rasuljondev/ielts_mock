@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase";
 import { parseContentForStudent } from "@/lib/contentParser";
+import { markSectionCompleted, isAllSectionsCompleted } from "@/lib/testProgressUtils";
 import { Clock, Headphones, Send, ArrowLeft, ChevronLeft, ChevronRight, CheckCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
@@ -35,10 +36,11 @@ const ListeningTestTaking: React.FC = () => {
   const [sections, setSections] = useState<any[]>([]);
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
   const [studentAnswers, setStudentAnswers] = useState<Record<string, string>>({});
-  const [timeLeft, setTimeLeft] = useState(3600); // 60 minutes default
+  const [timeLeft, setTimeLeft] = useState(3600); // Will be updated based on test type
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionId, setSubmissionId] = useState<string | null>(null);
+  const [testData, setTestData] = useState<any>(null);
 
   // Current section (computed from sections array and currentSectionIndex)
   const currentSection = sections[currentSectionIndex] || null;
@@ -223,6 +225,28 @@ const ListeningTestTaking: React.FC = () => {
     }
   };
 
+  // Load test data
+  const loadTestData = async () => {
+    if (!testId) return;
+    
+    try {
+      const { data: test, error } = await supabase
+        .from("tests")
+        .select("*")
+        .eq("id", testId)
+        .single();
+        
+      if (error) {
+        console.error("Error loading test data:", error);
+        return;
+      }
+      
+      setTestData(test);
+    } catch (error) {
+      console.error("Error loading test data:", error);
+    }
+  };
+
   // Load listening section and handle time persistence
   const fetchSection = async (retryCount = 0) => {
     if (!testId) return;
@@ -327,7 +351,8 @@ const ListeningTestTaking: React.FC = () => {
         console.log("🔍 Calling handleExistingSubmission with:", {
           sectionData: data[0],
           savedTime,
-          user: user?.id
+          user: user?.id,
+          testData: testData?.type
         });
         
         await handleExistingSubmission(data[0], savedTime);
@@ -342,10 +367,14 @@ const ListeningTestTaking: React.FC = () => {
     }
   };
 
-  // Fetch sections on mount
+  // Fetch sections and test data on mount
   useEffect(() => {
     if (testId) {
-      fetchSection();
+      const initializeTest = async () => {
+        await loadTestData();
+        await fetchSection();
+      };
+      initializeTest();
     }
   }, [testId]);
 
@@ -574,10 +603,28 @@ const ListeningTestTaking: React.FC = () => {
         return;
       }
 
+      // Load test data if not already loaded
+      let currentTestData = testData;
+      if (!currentTestData && testId) {
+        console.log("🔍 Loading test data for submission check...");
+        const { data: test, error } = await supabase
+          .from("tests")
+          .select("*")
+          .eq("id", testId)
+          .single();
+        
+        if (error) {
+          console.error("Error loading test data:", error);
+          return;
+        }
+        currentTestData = test;
+      }
+
       console.log("🔍 Checking for existing submission:", {
         testId,
         studentId: user?.id,
-        savedTime
+        savedTime,
+        testType: currentTestData?.type
       });
 
       // Check for existing submission in test_submissions table
@@ -601,19 +648,35 @@ const ListeningTestTaking: React.FC = () => {
           hasAnswers: !!existingSubmission.answers
         });
 
-        if (existingSubmission.status === "submitted" || existingSubmission.status === "completed") {
-          toast.info("You have already completed this test");
-          navigate("/student/tests/history");
-          return;
+        // Check if this is a full test and if the listening section is already completed
+        if (currentTestData?.type?.toLowerCase() === "full") {
+          // For full tests, check if listening section is completed
+          const completedSections = existingSubmission.completed_sections || [];
+          if (completedSections.includes('listening')) {
+            toast.info("You have already completed the listening section");
+            navigate(`/student/test/${testId}`);
+            return;
+          }
+        } else {
+          // For single tests, check if entire test is completed
+          if (existingSubmission.status === "submitted" || existingSubmission.status === "completed") {
+            toast.info("You have already completed this test");
+            navigate("/student/tests/history");
+            return;
+          }
         }
 
         setSubmissionId(existingSubmission.id);
         setStudentAnswers(existingSubmission.answers || {});
 
         // Restore time - use saved time if available, otherwise use submission time
+        const currentTestType = currentTestData?.type?.toLowerCase();
+        const isCurrentCombinedTest = currentTestType === "full";
+        const defaultTime = isCurrentCombinedTest ? 60 * 60 : 3600; // 60 minutes for combined tests
+        
         const timeToUse = savedTime
           ? parseInt(savedTime)
-          : existingSubmission.time_remaining_seconds || 3600; // 60 minutes default
+          : existingSubmission.time_remaining_seconds || defaultTime;
 
         setTimeLeft(timeToUse);
         console.log("✅ Restored existing submission with ID:", existingSubmission.id);
@@ -645,7 +708,13 @@ const ListeningTestTaking: React.FC = () => {
         });
 
         setSubmissionId(newSubmission.id);
-        setTimeLeft(3600); // 60 minutes default
+        
+        // Set timer based on test type (60 minutes for combined tests)
+        const newTestType = currentTestData?.type?.toLowerCase();
+        const isNewCombinedTest = newTestType === "full";
+        const defaultTime = isNewCombinedTest ? 60 * 60 : 3600; // 60 minutes for combined tests
+        
+        setTimeLeft(defaultTime);
       }
     } catch (error: any) {
       console.error("❌ Error handling existing submission:", error);
@@ -714,16 +783,38 @@ const ListeningTestTaking: React.FC = () => {
         return;
       }
 
+      // Get existing submission to merge answers
+      const { data: currentSubmission } = await supabase
+        .from("test_submissions")
+        .select("answers")
+        .eq("id", submissionId)
+        .single();
+
       // Update existing submission
       const { error } = await supabase
         .from("test_submissions")
         .update({
-          answers: studentAnswers,
+          answers: {
+            ...(currentSubmission?.answers || {}), // Keep existing answers from other sections
+            ...studentAnswers // Add listening answers
+          },
           status: "submitted",
           submitted_at: new Date().toISOString(),
           time_remaining_seconds: timeLeft,
         })
         .eq("id", submissionId);
+
+      // Mark listening section as completed
+      if (user?.id && testId) {
+        await markSectionCompleted(testId, user.id, 'listening');
+        
+        // Check if all sections are completed and trigger auto-grading
+        const { triggerAutoGrading } = await import('@/lib/testProgressUtils');
+        const isAllCompleted = await isAllSectionsCompleted(testId, user.id);
+        if (isAllCompleted) {
+          await triggerAutoGrading(submissionId);
+        }
+      }
 
       if (error) {
         console.error("❌ Submission error:", error);
@@ -739,8 +830,18 @@ const ListeningTestTaking: React.FC = () => {
       
       toast.success("Test submitted successfully!");
 
-      // Navigate back to tests
-      navigate("/student/tests/history");
+      // Check if this is part of a combined test
+      const testType = testData?.type?.toLowerCase();
+      const isCombinedTest = testType === "full";
+      
+              if (isCombinedTest) {
+          // For combined tests, redirect back to test start page
+          toast.info("Listening section completed! Continue with remaining sections.");
+          navigate(`/student/test/${testId}`);
+        } else {
+          // For single section tests, redirect to history
+          navigate("/student/tests/history");
+        }
     } catch (error: any) {
       console.error("❌ Error submitting:", error);
       const errorMessage = error.message || error.details || "Unknown error occurred";

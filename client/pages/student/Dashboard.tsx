@@ -487,7 +487,7 @@ const StudentDashboard: React.FC = () => {
                         <div>
                           <h4 className="font-medium">{test.title}</h4>
                           <p className="text-sm text-muted-foreground capitalize">
-                            {test.type} • {test.duration || 60} min
+                            {test.type === "full" ? "Full IELTS" : test.type} • {test.type === "full" ? "180" : (test.duration || 60)} min
                           </p>
                         </div>
                         {hasRequest ? (

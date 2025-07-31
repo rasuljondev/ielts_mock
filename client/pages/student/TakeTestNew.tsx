@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import Split from "react-split/dist/react-split";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -61,6 +62,12 @@ interface Question {
   section_number: number;
   question_number: number;
   passage_text?: string;
+  // Writing task specific properties
+  task_title?: string;
+  task_instructions?: string;
+  word_limit?: number;
+  task_image_url?: string;
+  task_type?: string;
 }
 
 const TakeTestNew: React.FC = () => {
@@ -89,6 +96,11 @@ const TakeTestNew: React.FC = () => {
     listening: [],
     writing: [],
   });
+
+  // Writing task specific state
+  const [writingTasks, setWritingTasks] = useState<any[]>([]);
+  const [currentWritingTask, setCurrentWritingTask] = useState(1);
+  const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
 
   // Load test data from localStorage as fallback
   const loadTestDataFromLocalStorage = (
@@ -436,7 +448,16 @@ const TakeTestNew: React.FC = () => {
         hasAccess = true; // Allow continuing if already started
       } else {
         // Set initial time
-        setTimeRemaining((testData.duration || 180) * 60);
+        // Set timer based on current section (60 minutes per section for combined tests)
+        const testType = testData.type?.toLowerCase();
+        
+        if (testType === "full") {
+          // For combined tests, set 60 minutes per section
+          setTimeRemaining(60 * 60); // 60 minutes in seconds
+        } else {
+          // For single section tests, use the test duration
+          setTimeRemaining((testData.duration || 60) * 60);
+        }
       }
 
       setTest({
@@ -605,6 +626,65 @@ const TakeTestNew: React.FC = () => {
         }
       }
 
+      // Load writing tasks only if test includes writing
+      if (
+        testType === "writing" ||
+        testType === "full" ||
+        testType === "writing_only"
+      ) {
+        console.log("✍️ Fetching writing tasks...");
+
+        try {
+          const result = await supabase
+            .from("writing_tasks")
+            .select("*")
+            .eq("test_id", testId)
+            .order("task_order");
+
+          const { data, error: writingError } = result;
+
+          if (writingError) {
+            console.error("❌ Writing tasks error details:", {
+              message: writingError.message || "Unknown error",
+              code: writingError.code || "No code",
+              details: writingError.details || "No details",
+              hint: writingError.hint || "No hint",
+              statusCode: writingError.statusCode || "No status",
+            });
+
+            const errorMessage = parseError(writingError);
+            console.error("📝 Writing error message:", errorMessage);
+            toast.error(`Writing tasks error: ${errorMessage}`);
+          } else {
+            writingTasks = data || [];
+            setWritingTasks(data || []); // Update the state
+            console.log("✅ Writing tasks loaded:", writingTasks.length);
+
+            if (writingTasks.length > 0) {
+              console.log("✍️ Sample writing task:", {
+                id: writingTasks[0].id,
+                title: writingTasks[0].task_title,
+                order: writingTasks[0].task_order,
+              });
+            }
+          }
+        } catch (fetchError) {
+          console.error("🚨 Writing tasks fetch error:", fetchError);
+
+          if (
+            fetchError instanceof TypeError &&
+            fetchError.message.includes("fetch")
+          ) {
+            toast.error(
+              "Network error loading writing tasks. Please check your connection.",
+            );
+          } else {
+            const errorMessage = parseError(fetchError);
+            toast.error(`Error loading writing tasks: ${errorMessage}`);
+          }
+        }
+      }
+
       // Load listening sections
       console.log("🎧 Fetching listening sections...");
       try {
@@ -710,6 +790,29 @@ const TakeTestNew: React.FC = () => {
       const readingQuestions: Question[] = [];
       const listeningQuestions: Question[] = [];
       const writingQuestions: Question[] = [];
+
+      // Process writing tasks
+      if (writingTasks && writingTasks.length > 0) {
+        console.log("✍️ Processing writing tasks:", writingTasks.length);
+        
+        writingTasks.forEach((task: any) => {
+          writingQuestions.push({
+            id: task.id,
+            type: "essay",
+            question_text: task.task_prompt,
+            section_type: "writing",
+            section_number: task.task_order,
+            question_number: 1,
+            task_title: task.task_title,
+            task_instructions: task.task_instructions,
+            word_limit: task.word_limit,
+            task_image_url: task.task_image_url,
+            task_type: task.task_type,
+          });
+        });
+        
+        console.log("✅ Writing questions processed:", writingQuestions.length);
+      }
 
       // Process reading questions
       if (readingSections) {
@@ -1347,6 +1450,68 @@ const TakeTestNew: React.FC = () => {
     setAnswers((prev) => ({ ...prev, [questionId]: answer }));
   };
 
+  // Writing task specific functions
+  const handleWritingChange = (taskId: string, content: string) => {
+    setAnswers((prev) => ({
+      ...prev,
+      [taskId]: content,
+    }));
+
+    // Calculate word count
+    const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
+    setWordCounts((prev) => ({
+      ...prev,
+      [taskId]: wordCount,
+    }));
+  };
+
+  const getCurrentWritingTask = () => {
+    return writingTasks.find((t) => t.task_order === currentWritingTask) || writingTasks[0];
+  };
+
+  // Helper functions for combined test flow
+  const getTotalSections = () => {
+    let total = 0;
+    if (testQuestions.reading.length > 0) total++;
+    if (testQuestions.listening.length > 0) total++;
+    if (testQuestions.writing.length > 0) total++;
+    console.log("🔍 Total sections calculation:", {
+      reading: testQuestions.reading.length,
+      listening: testQuestions.listening.length,
+      writing: testQuestions.writing.length,
+      total
+    });
+    return total;
+  };
+
+  const checkCompletedSections = async () => {
+    if (!user?.id || !testId) return 0;
+    
+    try {
+      // For combined tests, we need to track section completion differently
+      // Since the database doesn't have section_type, we'll use localStorage
+      // to track which sections have been completed
+      const localStorageKey = `completed-sections-${testId}-${user.id}`;
+      const completedSectionsData = localStorage.getItem(localStorageKey);
+      
+      if (completedSectionsData) {
+        const completedSections = JSON.parse(completedSectionsData);
+        let completedCount = 0;
+        
+        if (testQuestions.reading.length > 0 && completedSections.includes("reading")) completedCount++;
+        if (testQuestions.listening.length > 0 && completedSections.includes("listening")) completedCount++;
+        if (testQuestions.writing.length > 0 && completedSections.includes("writing")) completedCount++;
+        
+        return completedCount;
+      }
+      
+      return 0;
+    } catch (error) {
+      console.error("Error checking completed sections:", error);
+      return 0;
+    }
+  };
+
   const handleSubmitTest = async () => {
     if (isSubmitting) return;
 
@@ -1440,7 +1605,47 @@ const TakeTestNew: React.FC = () => {
 
       console.log("✅ Test submitted successfully");
       toast.success("Test submitted successfully!");
-      navigate("/student/tests/history");
+      
+      // Check if this is a combined test with multiple sections
+      const testType = test?.type?.toLowerCase();
+      const totalSections = getTotalSections();
+      console.log("🔍 Test type:", testType);
+      console.log("🔍 Current section:", currentSection);
+      console.log("🔍 Test object:", test);
+      console.log("🔍 Test questions:", testQuestions);
+      console.log("🔍 Total sections:", totalSections);
+      
+      // Check if this is a combined test (has multiple sections)
+      if (totalSections > 1) {
+        // Mark current section as completed in localStorage
+        const localStorageKey = `completed-sections-${testId}-${user.id}`;
+        const existingData = localStorage.getItem(localStorageKey);
+        const completedSections = existingData ? JSON.parse(existingData) : [];
+        
+        if (!completedSections.includes(currentSection)) {
+          completedSections.push(currentSection);
+          localStorage.setItem(localStorageKey, JSON.stringify(completedSections));
+        }
+        
+        // Check if all sections are completed
+        const completedCount = completedSections.length;
+        const totalSections = getTotalSections();
+        
+        console.log(`Completed sections: ${completedCount}/${totalSections}`);
+        
+        if (completedCount < totalSections) {
+          // More sections to complete, redirect back to test start
+          toast.info("Section completed! Continue with remaining sections.");
+          navigate(`/student/test/${testId}/start`);
+        } else {
+          // All sections completed, redirect to history
+          toast.success("All sections completed! Test submitted successfully.");
+          navigate("/student/tests/history");
+        }
+      } else {
+        // Single section test, redirect to history
+        navigate("/student/tests/history");
+      }
     } catch (error: any) {
       // Enhanced error logging with manual property inspection
       console.error("❌ Submit failed - Full error analysis:");
@@ -1512,7 +1717,42 @@ const TakeTestNew: React.FC = () => {
         .eq("id", submissionId);
 
       toast.info("Time's up! Test submitted automatically.");
-      navigate("/student/tests/history");
+      
+      // Check if this is a combined test with multiple sections
+      const testType = test?.type?.toLowerCase();
+      const totalSections = getTotalSections();
+      
+      // Check if this is a combined test (has multiple sections)
+      if (totalSections > 1) {
+        // Mark current section as completed in localStorage
+        const localStorageKey = `completed-sections-${testId}-${user.id}`;
+        const existingData = localStorage.getItem(localStorageKey);
+        const completedSections = existingData ? JSON.parse(existingData) : [];
+        
+        if (!completedSections.includes(currentSection)) {
+          completedSections.push(currentSection);
+          localStorage.setItem(localStorageKey, JSON.stringify(completedSections));
+        }
+        
+        // Check if all sections are completed
+        const completedCount = completedSections.length;
+        const totalSections = getTotalSections();
+        
+        console.log(`Completed sections: ${completedCount}/${totalSections}`);
+        
+        if (completedCount < totalSections) {
+          // More sections to complete, redirect back to test start
+          toast.info("Section completed! Continue with remaining sections.");
+          navigate(`/student/test/${testId}/start`);
+        } else {
+          // All sections completed, redirect to history
+          toast.success("All sections completed! Test submitted successfully.");
+          navigate("/student/tests/history");
+        }
+      } else {
+        // Single section test, redirect to history
+        navigate("/student/tests/history");
+      }
     } catch (error: any) {
       logError("handleAutoSubmit", error);
       const errorMessage = parseError(error);
@@ -1667,6 +1907,86 @@ const TakeTestNew: React.FC = () => {
         );
 
       case "essay":
+        // Check if this is a writing task with additional properties
+        if (question.task_title && question.section_type === "writing") {
+          const currentTask = getCurrentWritingTask();
+          if (!currentTask) {
+            return <div>No writing task found</div>;
+          }
+
+          return (
+            <div className="h-full flex flex-col">
+              <Split
+                className="flex-1 flex gap-4"
+                minSize={200}
+                sizes={[50, 50]}
+                gutterSize={8}
+                direction="horizontal"
+                style={{ height: "100%" }}
+              >
+                {/* Left: Instructions/Prompt/Image */}
+                <div className="bg-white rounded-lg shadow p-6 flex flex-col h-full overflow-auto min-w-[280px]">
+                  <h2 className="text-lg font-bold mb-2">
+                    {question.task_title}
+                  </h2>
+                  <div className="mb-2">
+                    <span className="font-semibold">Instructions: </span>
+                    {question.task_instructions?.trim()
+                      ? question.task_instructions
+                      : (question.section_number === 1
+                        ? "Summarise the information by selecting and reporting the main features, and make comparisons where relevant. Write at least 150 words."
+                        : "Present a well-organised response to the prompt. Write at least 250 words.")}
+                  </div>
+                  <div className="mb-2">
+                    <span className="font-semibold">Prompt: </span>
+                    <div
+                      className="prose max-w-none"
+                      dangerouslySetInnerHTML={{ __html: question.question_text }}
+                    />
+                  </div>
+                  {question.task_image_url && question.section_number === 1 && (
+                    <div className="mb-2">
+                      <img
+                        src={question.task_image_url}
+                        alt="Task visual"
+                        className="w-full rounded border"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Right: Input Area */}
+                <div className="bg-gray-50 rounded-lg shadow p-6 flex flex-col h-full min-w-[280px]">
+                  <label className="block font-semibold mb-2" htmlFor={`textarea-${question.id}`}>
+                    Your Answer for Task {question.section_number}
+                  </label>
+                  <textarea
+                    id={`textarea-${question.id}`}
+                    className="w-full flex-1 min-h-[350px] md:min-h-[400px] h-full border rounded p-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+                    placeholder={`Write your response to Task ${question.section_number} here...\n\nRemember to write at least ${question.word_limit || 150} words.`}
+                    value={answer || ""}
+                    onChange={(e) => handleWritingChange(question.id, e.target.value)}
+                    disabled={isSubmitting}
+                    maxLength={5000}
+                    style={{ minHeight: '350px', height: '100%', flex: 1 }}
+                  />
+                  <div className="flex justify-between text-sm text-gray-600 mt-1">
+                    <span>Min. words: {question.word_limit || 150}</span>
+                    <span className={
+                      (wordCounts[question.id] || 0) >= (question.word_limit || 150)
+                        ? "text-green-600 font-semibold"
+                        : "text-orange-600 font-semibold"
+                    }>
+                      Current: {wordCounts[question.id] || 0}
+                    </span>
+                  </div>
+                </div>
+              </Split>
+            </div>
+          );
+        }
+
+        // Fallback for regular essay questions
         return (
           <Textarea
             placeholder="Write your essay here..."
@@ -2146,43 +2466,118 @@ const TakeTestNew: React.FC = () => {
         </div>
       </div>
 
-      {/* Bottom Navigation Bar - Fixed 3 Passages */}
+      {/* Bottom Navigation Bar - Dynamic based on current section */}
       <div className="bg-white border-t py-2 px-4 flex-shrink-0">
         <div className="flex items-center justify-center space-x-4">
-          {[1, 2, 3].map((passageNum) => {
-            const passageQuestions = testQuestions.reading.filter(
-              (q) => q.section_number === passageNum,
-            );
-            const hasQuestions = passageQuestions.length > 0;
+          {currentSection === "reading" && (
+            // Reading passages navigation
+            <>
+              {[1, 2, 3].map((passageNum) => {
+                const passageQuestions = testQuestions.reading.filter(
+                  (q) => q.section_number === passageNum,
+                );
+                const hasQuestions = passageQuestions.length > 0;
 
-            return (
-              <Button
-                key={`passage-${passageNum}`}
-                variant={hasQuestions ? "outline" : "ghost"}
-                className={`min-w-[140px] h-12 ${!hasQuestions ? "opacity-50" : ""}`}
-                disabled={!hasQuestions}
-                onClick={() => {
-                  if (hasQuestions) {
-                    const firstQuestionIndex = testQuestions.reading.findIndex(
-                      (q) => q.section_number === passageNum,
+                return (
+                  <Button
+                    key={`passage-${passageNum}`}
+                    variant={hasQuestions ? "outline" : "ghost"}
+                    className={`min-w-[140px] h-12 ${!hasQuestions ? "opacity-50" : ""}`}
+                    disabled={!hasQuestions}
+                    onClick={() => {
+                      if (hasQuestions) {
+                        const firstQuestionIndex = testQuestions.reading.findIndex(
+                          (q) => q.section_number === passageNum,
+                        );
+                        if (firstQuestionIndex !== -1) {
+                          setCurrentQuestionIndex(firstQuestionIndex);
+                        }
+                      }
+                    }}
+                  >
+                    <div className="text-center">
+                      <div className="font-semibold">Passage {passageNum}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {hasQuestions
+                          ? `${passageQuestions.length} questions`
+                          : "Not assigned"}
+                      </div>
+                    </div>
+                  </Button>
+                );
+              })}
+            </>
+          )}
+
+          {currentSection === "listening" && (
+            // Listening sections navigation
+            <>
+              {[1, 2, 3, 4].map((sectionNum) => {
+                const sectionQuestions = testQuestions.listening.filter(
+                  (q) => q.section_number === sectionNum,
+                );
+                const hasQuestions = sectionQuestions.length > 0;
+
+                return (
+                  <Button
+                    key={`section-${sectionNum}`}
+                    variant={hasQuestions ? "outline" : "ghost"}
+                    className={`min-w-[140px] h-12 ${!hasQuestions ? "opacity-50" : ""}`}
+                    disabled={!hasQuestions}
+                    onClick={() => {
+                      if (hasQuestions) {
+                        const firstQuestionIndex = testQuestions.listening.findIndex(
+                          (q) => q.section_number === sectionNum,
+                        );
+                        if (firstQuestionIndex !== -1) {
+                          setCurrentQuestionIndex(firstQuestionIndex);
+                        }
+                      }
+                    }}
+                  >
+                    <div className="text-center">
+                      <div className="font-semibold">Section {sectionNum}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {hasQuestions
+                          ? `${sectionQuestions.length} questions`
+                          : "Not assigned"}
+                      </div>
+                    </div>
+                  </Button>
+                );
+              })}
+            </>
+          )}
+
+          {currentSection === "writing" && (
+            // Writing tasks navigation
+            <>
+              {writingTasks.map((task) => (
+                <Button
+                  key={`task-${task.task_order}`}
+                  variant={currentWritingTask === task.task_order ? "default" : "outline"}
+                  className="min-w-[140px] h-12"
+                  onClick={() => {
+                    setCurrentWritingTask(task.task_order);
+                    // Find the question index for this task
+                    const questionIndex = testQuestions.writing.findIndex(
+                      (q) => q.section_number === task.task_order,
                     );
-                    if (firstQuestionIndex !== -1) {
-                      setCurrentQuestionIndex(firstQuestionIndex);
+                    if (questionIndex !== -1) {
+                      setCurrentQuestionIndex(questionIndex);
                     }
-                  }
-                }}
-              >
-                <div className="text-center">
-                  <div className="font-semibold">Passage {passageNum}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {hasQuestions
-                      ? `${passageQuestions.length} questions`
-                      : "Not assigned"}
+                  }}
+                >
+                  <div className="text-center">
+                    <div className="font-semibold">Task {task.task_order}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {task.task_title || `Writing Task ${task.task_order}`}
+                    </div>
                   </div>
-                </div>
-              </Button>
-            );
-          })}
+                </Button>
+              ))}
+            </>
+          )}
         </div>
       </div>
     </div>

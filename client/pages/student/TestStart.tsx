@@ -21,6 +21,7 @@ import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
+import { getTestProgress, getSectionStatuses, isAllSectionsCompleted } from "@/lib/testProgressUtils";
 
 interface TestSection {
   type: "reading" | "listening" | "writing";
@@ -91,10 +92,14 @@ const TestStart: React.FC = () => {
           loadWritingSections(),
         ]);
 
+      // Check for completed sections
+      const completedSections = await checkCompletedSections();
+
       // Build test info with detected sections
       const sections: TestSection[] = [];
 
       if (readingSections.length > 0) {
+        const isCompleted = completedSections.has("reading");
         sections.push({
           type: "reading",
           title: "Reading",
@@ -105,28 +110,30 @@ const TestStart: React.FC = () => {
             0,
           ),
           description: `${readingSections.length} passage${readingSections.length > 1 ? "s" : ""} with comprehension questions`,
-          status: "available",
+          status: isCompleted ? "completed" : "available",
           estimatedTime: "60 minutes",
         });
       }
 
       if (listeningSections.length > 0) {
+        const isCompleted = completedSections.has("listening");
         sections.push({
           type: "listening",
           title: "Listening",
           icon: Volume2,
-          duration: 30,
+          duration: 60,
           questionCount: listeningSections.reduce(
             (total, section) => total + (section.questionCount || 0),
             0,
           ),
           description: `${listeningSections.length} section${listeningSections.length > 1 ? "s" : ""} with audio recordings`,
-          status: "available",
-          estimatedTime: "30 minutes",
+          status: isCompleted ? "completed" : "available",
+          estimatedTime: "60 minutes",
         });
       }
 
       if (writingSections.length > 0) {
+        const isCompleted = completedSections.has("writing");
         sections.push({
           type: "writing",
           title: "Writing",
@@ -134,7 +141,7 @@ const TestStart: React.FC = () => {
           duration: 60,
           questionCount: writingSections.length,
           description: `${writingSections.length} writing task${writingSections.length > 1 ? "s" : ""}`,
-          status: "available",
+          status: isCompleted ? "completed" : "available",
           estimatedTime: "60 minutes",
         });
       }
@@ -319,11 +326,32 @@ const TestStart: React.FC = () => {
     }
   };
 
-  const startFullTest = () => {
-    console.log(`🚀 Starting full test ${testId}`);
-    // Start with first available section
-    if (testInfo?.sections.length) {
-      startSection(testInfo.sections[0].type);
+
+
+  const checkCompletedSections = async () => {
+    if (!user?.id || !testId) return new Set();
+    
+    try {
+      // Check if all sections are completed
+      const isCompleted = await isAllSectionsCompleted(testId, user.id);
+      
+      if (isCompleted) {
+        // Redirect to test history if all sections are completed
+        toast.info("All sections completed! Redirecting to test history.");
+        navigate("/student/tests/history");
+        return new Set();
+      }
+      
+      // Get section statuses from database
+      const sectionStatuses = await getSectionStatuses(testId, user.id);
+      const completedSections = sectionStatuses
+        .filter(section => section.status === 'completed')
+        .map(section => section.type);
+      
+      return new Set(completedSections);
+    } catch (error) {
+      console.error("Error checking completed sections:", error);
+      return new Set();
     }
   };
 
@@ -437,15 +465,22 @@ const TestStart: React.FC = () => {
                       </div>
                     </div>
 
-                    <Button
-                      onClick={() => startSection(section.type)}
-                      disabled={section.status !== "available"}
-                      size="lg"
-                      className="flex items-center gap-2 px-6"
-                    >
-                      <Play className="h-4 w-4" />
-                      Start {section.title}
-                    </Button>
+                    {section.status === "completed" ? (
+                      <div className="flex items-center gap-2 px-6 py-2 bg-green-100 text-green-800 rounded-lg">
+                        <CheckCircle className="h-4 w-4" />
+                        Completed
+                      </div>
+                    ) : (
+                      <Button
+                        onClick={() => startSection(section.type)}
+                        disabled={section.status !== "available"}
+                        size="lg"
+                        className="flex items-center gap-2 px-6"
+                      >
+                        <Play className="h-4 w-4" />
+                        Start {section.title}
+                      </Button>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -460,17 +495,6 @@ const TestStart: React.FC = () => {
           transition={{ delay: 0.4 }}
           className="text-center space-y-4"
         >
-          {testInfo.sections.length > 1 && (
-            <Button
-              onClick={startFullTest}
-              size="lg"
-              className="px-8 py-3 text-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700"
-            >
-              <ArrowRight className="h-5 w-5 mr-2" />
-              Take Full Test ({testInfo.totalDuration} minutes)
-            </Button>
-          )}
-
           <div>
             <Button
               onClick={() => navigate("/student/tests")}

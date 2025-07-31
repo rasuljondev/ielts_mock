@@ -6,6 +6,7 @@ import { Clock, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
+import { markSectionCompleted, isAllSectionsCompleted } from "@/lib/testProgressUtils";
 import Split from "react-split/dist/react-split";
 
 interface WritingTask {
@@ -98,12 +99,23 @@ const TakeWritingTest: React.FC = () => {
     }
   }, [localStorageKey]);
 
-  // If already submitted, redirect to confirmation page
+  // If already submitted, redirect to confirmation page or test start for combined tests
   useEffect(() => {
     if (submitted) {
-      navigate("/student/test/confirmation", { replace: true, state: { writing: true } });
+      // Check if this is part of a combined test
+      const testType = testData?.type?.toLowerCase();
+      const isCombinedTest = testType === "full";
+      
+      if (isCombinedTest) {
+        // For combined tests, redirect back to test start page
+        toast.info("Writing section completed! Continue with remaining sections.");
+        navigate(`/student/test/${testId}`);
+      } else {
+        // For single section tests, redirect to confirmation page
+        navigate("/student/test/confirmation", { replace: true, state: { writing: true } });
+      }
     }
-  }, [submitted, navigate]);
+  }, [submitted, navigate, testData, testId]);
 
   // Auto-save answers and time to localStorage on every change
   useEffect(() => {
@@ -183,13 +195,44 @@ const TakeWritingTest: React.FC = () => {
         status: "submitted",
       };
       console.log("Upserting submission to Supabase", submission);
-      const { error } = await supabase
+      // Get existing submission to merge answers
+      const { data: currentSubmission } = await supabase
         .from("test_submissions")
-        .upsert(submission, { onConflict: "test_id,student_id" });
+        .select("answers")
+        .eq("test_id", testId)
+        .eq("student_id", user?.id)
+        .single();
+
+      // Update submission with merged answers
+      const updatedSubmission = {
+        ...submission,
+        answers: {
+          ...(currentSubmission?.answers || {}), // Keep existing answers from other sections
+          ...answers // Add writing answers
+        }
+      };
+
+      const { data: upsertResult, error } = await supabase
+        .from("test_submissions")
+        .upsert(updatedSubmission, { onConflict: "test_id,student_id" })
+        .select("id")
+        .single();
       if (error) {
         setUiError("Failed to save your submission. Please try again or contact support.");
         console.error("Supabase upsert error", error);
         throw error;
+      }
+
+      // Mark writing section as completed
+      if (user?.id && testId) {
+        await markSectionCompleted(testId, user.id, 'writing');
+        
+        // Check if all sections are completed and trigger auto-grading
+        const { triggerAutoGrading } = await import('@/lib/testProgressUtils');
+        const isAllCompleted = await isAllSectionsCompleted(testId, user.id);
+        if (isAllCompleted && upsertResult?.id) {
+          await triggerAutoGrading(upsertResult.id);
+        }
       }
       if (timerRef.current) clearInterval(timerRef.current);
       if (localStorageKey) {

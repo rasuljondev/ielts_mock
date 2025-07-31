@@ -37,6 +37,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "@/lib/supabase";
 import { enhancedSupabase, safeSupabaseOperation } from "@/lib/supabaseClient";
 import { useAuth } from "@/contexts/AuthContext";
+import { markSectionCompleted, isAllSectionsCompleted } from "@/lib/testProgressUtils";
 import { parseContentForStudent } from "@/lib/contentParser";
 import {
   parseError,
@@ -213,6 +214,22 @@ const TakeReadingExam: React.FC = () => {
 
 
 
+      // Load test data if not already loaded
+      let currentTestData = test;
+      if (!currentTestData && testId) {
+        const { data: testData, error } = await supabase
+          .from("tests")
+          .select("*")
+          .eq("id", testId)
+          .single();
+        
+        if (error) {
+          console.error("Error loading test data:", error);
+          return;
+        }
+        currentTestData = testData;
+      }
+
       // Load existing submission
       const { data: existingSubmission } = await supabase
         .from("test_submissions")
@@ -222,30 +239,50 @@ const TakeReadingExam: React.FC = () => {
         .single();
 
       if (existingSubmission) {
-        if (existingSubmission.status === "submitted" || existingSubmission.status === "completed") {
-          toast.info("You have already completed this test");
-          navigate("/student/tests/history");
-          return;
+        // Check if this is a full test and if the reading section is already completed
+        if (currentTestData?.type?.toLowerCase() === "full") {
+          // For full tests, check if reading section is completed
+          const completedSections = existingSubmission.completed_sections || [];
+          if (completedSections.includes('reading')) {
+            toast.info("You have already completed the reading section");
+            navigate(`/student/test/${testId}`);
+            return;
+          }
+        } else {
+          // For single tests, check if entire test is completed
+          if (existingSubmission.status === "submitted" || existingSubmission.status === "completed") {
+            toast.info("You have already completed this test");
+            navigate("/student/tests/history");
+            return;
+          }
         }
 
         setSubmissionId(existingSubmission.id);
         setAnswers(existingSubmission.answers || {});
 
         // Restore time - use saved time if available, otherwise use submission time
+        const testType = currentTestData?.type?.toLowerCase();
+        const isCombinedTest = testType === "full";
+        const defaultTime = isCombinedTest ? 60 * 60 : currentTestData.duration * 60; // 60 minutes for combined tests
+        
         const timeToUse = savedTime
           ? parseInt(savedTime)
-          : existingSubmission.time_remaining_seconds || testData.duration * 60;
+          : existingSubmission.time_remaining_seconds || defaultTime;
 
         setTimeRemaining(timeToUse);
       } else {
         // Create new submission
+        const testType = currentTestData?.type?.toLowerCase();
+        const isCombinedTest = testType === "full";
+        const defaultTime = isCombinedTest ? 60 * 60 : currentTestData.duration * 60; // 60 minutes for combined tests
+        
         const { data: newSubmission, error: submissionError } = await supabase
           .from("test_submissions")
           .insert({
             test_id: testId,
             student_id: user?.id,
             status: "in_progress",
-            time_remaining_seconds: testData.duration * 60,
+            time_remaining_seconds: defaultTime,
             answers: {},
           })
           .select()
@@ -254,7 +291,7 @@ const TakeReadingExam: React.FC = () => {
         if (submissionError) throw submissionError;
 
         setSubmissionId(newSubmission.id);
-        setTimeRemaining(testData.duration * 60);
+        setTimeRemaining(defaultTime);
       }
 
       // Load reading sections and questions
@@ -428,16 +465,38 @@ const TakeReadingExam: React.FC = () => {
         1000,
       );
 
-      // Submit test with enhanced client
+      // Get existing submission to merge answers
+      const { data: currentSubmission } = await supabase
+        .from("test_submissions")
+        .select("answers")
+        .eq("id", submissionId)
+        .single();
+
+      // Submit test with enhanced client - update existing submission
       await enhancedSupabase.update(
         "test_submissions",
         {
           status: "submitted",
           submitted_at: new Date().toISOString(),
-          answers,
+          answers: {
+            ...(currentSubmission?.answers || {}), // Keep existing answers from other sections
+            ...answers // Add reading answers
+          },
         },
         { id: submissionId },
       );
+
+      // Mark reading section as completed
+      if (user?.id && testId) {
+        await markSectionCompleted(testId, user.id, 'reading');
+        
+        // Check if all sections are completed and trigger auto-grading
+        const { triggerAutoGrading, isAllSectionsCompleted } = await import('@/lib/testProgressUtils');
+        const isAllCompleted = await isAllSectionsCompleted(testId, user.id);
+        if (isAllCompleted) {
+          await triggerAutoGrading(submissionId);
+        }
+      }
 
       // Clear saved time
       localStorage.removeItem(`exam-time-${testId}`);
@@ -446,10 +505,22 @@ const TakeReadingExam: React.FC = () => {
       // Set submitting to false before navigation to prevent DOM updates
       setIsSubmitting(false);
       
+      // Check if this is part of a combined test
+      const testType = test?.type?.toLowerCase();
+      const isCombinedTest = testType === "full";
+      
       // Use setTimeout to ensure all state updates are complete before navigation
       setTimeout(() => {
         toast.success("Test submitted successfully!");
-        navigate("/student/tests/history");
+        
+        if (isCombinedTest) {
+          // For combined tests, redirect back to test start page
+          toast.info("Reading section completed! Continue with remaining sections.");
+          navigate(`/student/test/${testId}`);
+        } else {
+          // For single section tests, redirect to history
+          navigate("/student/tests/history");
+        }
       }, 100);
     } catch (error: any) {
       logError("handleSubmitTest", error);
